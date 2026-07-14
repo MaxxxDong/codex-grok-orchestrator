@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Source-checkout launcher. Package installs expose the same command through
+# the Python console entry point.
+set -euo pipefail
+
+resolve_skill_root() {
+  if [ -n "${GROK_WORKER_SKILL_ROOT:-}" ]; then
+    printf '%s\n' "$GROK_WORKER_SKILL_ROOT"
+    return
+  fi
+  local here
+  here="$(cd "$(dirname "$0")" && pwd)"
+  # Candidate / co-located layout: bin/ next to src/
+  if [ -d "$here/../src/grok_worker" ]; then
+    cd "$here/.." && pwd
+    return
+  fi
+  echo "grok-worker: cannot locate repository root (set GROK_WORKER_SKILL_ROOT)" >&2
+  exit 1
+}
+
+ROOT="$(resolve_skill_root)"
+export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# Shared CLI cache outside any clone; mirrors the Python cache-root contract.
+if [ -n "${GROK_WORKER_CACHE_ROOT:-}" ]; then
+  CACHE_ROOT="$GROK_WORKER_CACHE_ROOT"
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+  CACHE_ROOT="$XDG_CACHE_HOME/grok-worker"
+elif [ "$(uname -s)" = "Darwin" ]; then
+  CACHE_ROOT="$HOME/Library/Caches/grok-worker"
+else
+  CACHE_ROOT="$HOME/.cache/grok-worker"
+fi
+CLI_CACHE="$CACHE_ROOT/cli"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$CACHE_ROOT/uv}"
+mkdir -p "$CLI_CACHE"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "grok-worker: uv is required on PATH" >&2
+  exit 1
+fi
+
+# Require Python >= 3.12
+PY_OK=0
+for cand in python3.14 python3.13 python3.12 python3; do
+  if command -v "$cand" >/dev/null 2>&1; then
+    if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+      PY_OK=1
+      break
+    fi
+  fi
+done
+if [ "$PY_OK" -ne 1 ]; then
+  echo "grok-worker: Python 3.12+ is required" >&2
+  exit 1
+fi
+
+# Pin Typer+Click deterministically via shared uv cache (never a clone-local env)
+PINNED_TYPER="${GROK_WORKER_TYPER_SPEC:-typer==0.15.2}"
+PINNED_CLICK="${GROK_WORKER_CLICK_SPEC:-click==8.1.8}"
+exec uv run --no-project --with "$PINNED_TYPER" --with "$PINNED_CLICK" \
+  python -m grok_worker "$@"

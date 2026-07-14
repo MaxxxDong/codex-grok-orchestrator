@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "grok-worker-task-manifest-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "outcome",
+    "verification",
+    "constraints",
+    "boundaries",
+    "iterationPolicy",
+    "stopWhen",
+    "pauseIf"
+  ],
+  "properties": {
+    "taskId": {"type": "string", "minLength": 1},
+    "outcome": {"type": "string", "minLength": 1},
+    "verification": {"type": "array", "items": {"type": "string"}},
+    "constraints": {"type": "array", "items": {"type": "string"}},
+    "boundaries": {"type": "object"},
+    "iterationPolicy": {"type": "string", "minLength": 1},
+    "stopWhen": {"type": "string", "minLength": 1},
+    "pauseIf": {"type": "string", "minLength": 1}
+  }
+}

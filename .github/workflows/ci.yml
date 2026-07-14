@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check src tests
+      - run: uv run mypy src
+      - run: uv run pytest
+      - run: uv build
+      - name: Verify wheel payload and entry points
+        shell: bash
+        run: |
+          VENV="$RUNNER_TEMP/grok-worker-smoke"
+          uv venv "$VENV"
+          uv pip install --python "$VENV/bin/python" dist/*.whl
+          "$VENV/bin/python" -c 'from importlib.resources import files; assert (files("grok_worker") / "prompts" / "base-v1.md").is_file()'
+          "$VENV/bin/grok-worker" --help >/dev/null
+          set +e
+          "$VENV/bin/grok-worker-agent" >/dev/null 2>agent-error.txt
+          code=$?
+          set -e
+          test "$code" -eq 2
+          grep -qi refusing agent-error.txt
+      - name: Reject private release material
+        run: |
+          ! git grep -n -E '/Users/[A-Za-z0-9._-]+/|kuaipao\.(ai|pro)|xfyun|sk-[A-Za-z0-9]{16,}' -- ':!.github/workflows/ci.yml'

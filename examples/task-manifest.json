@@ -1,0 +1,20 @@
+{
+  "taskId": "public-release-audit",
+  "outcome": "Audit packaging, privacy, and release readiness without modifying files.",
+  "verification": [
+    "Report concrete findings with file evidence",
+    "Verify no personal paths or credentials are present",
+    "Write the required three-file artifact contract"
+  ],
+  "constraints": [
+    "Read-only analysis",
+    "Do not use network access"
+  ],
+  "boundaries": {
+    "mayEdit": false,
+    "mayUseNetwork": false
+  },
+  "iterationPolicy": "Inspect once, then verify every reported finding against a file.",
+  "stopWhen": "All public-release surfaces have been checked and a structured result is written.",
+  "pauseIf": "A destructive action, credential, or external publication would be required."
+}

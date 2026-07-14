@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$here/.." && pwd)
+export PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python_bin="${GROK_WORKER_PYTHON:-}"
+if [ -z "$python_bin" ]; then
+  for candidate in python3.14 python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+      "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+      python_bin="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$python_bin" ]; then
+  echo "grok-acp-worker: Python 3.12+ is required" >&2
+  exit 1
+fi
+
+exec "$python_bin" -m grok_worker.agent_entry

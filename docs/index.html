@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codex-grok-orchestrator — Codex dispatches. Grok executes. Evidence decides.</title>
+  <meta name="description" content="Public Codex–Grok orchestration: Codex dispatches and reviews; Grok runs as an isolated, lifecycle-managed worker; evidence determines acceptance. CLI package: grok-worker.">
+  <link rel="canonical" href="https://maxxxdong.github.io/codex-grok-orchestrator/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="codex-grok-orchestrator">
+  <meta property="og:title" content="codex-grok-orchestrator — Codex dispatches. Grok executes. Evidence decides.">
+  <meta property="og:description" content="Isolated Grok workers with a verified three-file handoff. Package and CLI: grok-worker.">
+  <meta property="og:url" content="https://maxxxdong.github.io/codex-grok-orchestrator/">
+  <meta property="og:image" content="https://maxxxdong.github.io/codex-grok-orchestrator/assets/grok-worker-intro-poster.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="codex-grok-orchestrator">
+  <meta name="twitter:description" content="Codex dispatches. Grok executes. Evidence decides. CLI: grok-worker.">
+  <meta name="twitter:image" content="https://maxxxdong.github.io/codex-grok-orchestrator/assets/grok-worker-intro-poster.jpg">
+  <style>
+    :root {
+      --paper: #f6f1e8;
+      --paper-deep: #efe6d8;
+      --ink: #1c1917;
+      --ink-soft: #44403c;
+      --ink-mute: #78716c;
+      --line: #d6cfc3;
+      --terracotta: #c45c3e;
+      --terracotta-deep: #9a3f28;
+      --terracotta-soft: #f0d5cb;
+      --card: #fffdf9;
+      --focus: #9a3f28;
+      --max: 42rem;
+      --wide: 58rem;
+      --radius: 12px;
+      --font: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+        "Noto Serif SC", "Songti SC", "Source Han Serif SC", Georgia, serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      font-size: 1.0625rem;
+      line-height: 1.7;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, var(--terracotta-soft), transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #e8e0d2, transparent 50%),
+        var(--paper);
+      min-height: 100vh;
+    }
+
+    a {
+      color: var(--terracotta-deep);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.18em;
+    }
+    a:hover { color: var(--terracotta); }
+    a:focus-visible,
+    button:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+      border-radius: 2px;
+    }
+
+    .skip {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      background: var(--ink);
+      color: var(--paper);
+      padding: 0.5rem 1rem;
+      z-index: 100;
+    }
+    .skip:focus { left: 1rem; top: 1rem; }
+
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      backdrop-filter: blur(10px);
+      background: color-mix(in srgb, var(--paper) 88%, transparent);
+      border-bottom: 1px solid var(--line);
+    }
+    .header-inner {
+      max-width: var(--wide);
+      margin: 0 auto;
+      padding: 0.85rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+      min-width: 0;
+    }
+    .brand-name {
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-size: 0.98rem;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .brand-sub {
+      font-size: 0.78rem;
+      color: var(--ink-mute);
+    }
+    .lang-toggle {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--card);
+      flex-shrink: 0;
+    }
+    .lang-toggle button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--ink-soft);
+      font: inherit;
+      font-size: 0.85rem;
+      padding: 0.4rem 0.85rem;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+    .lang-toggle button[aria-pressed="true"] {
+      background: var(--ink);
+      color: var(--paper);
+    }
+    .lang-toggle button:hover:not([aria-pressed="true"]) {
+      background: var(--paper-deep);
+    }
+
+    main { display: block; }
+    .wrap {
+      max-width: var(--wide);
+      margin: 0 auto;
+      padding: 0 1.25rem;
+    }
+    .narrow { max-width: var(--max); margin-left: auto; margin-right: auto; }
+
+    .hero {
+      padding: 3.5rem 0 2.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      display: inline-block;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--terracotta-deep);
+      border: 1px solid var(--terracotta-soft);
+      background: color-mix(in srgb, var(--terracotta-soft) 45%, var(--card));
+      border-radius: 999px;
+      padding: 0.28rem 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    h1 {
+      font-size: clamp(2rem, 4.5vw, 3rem);
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      font-weight: 600;
+      margin: 0 0 1rem;
+      max-width: 16ch;
+    }
+    .lede {
+      font-size: 1.15rem;
+      color: var(--ink-soft);
+      max-width: 38rem;
+      margin: 0 0 1.75rem;
+    }
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.7rem 1.15rem;
+      border-radius: 999px;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border: 1px solid transparent;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-primary {
+      background: var(--terracotta);
+      color: #fffaf6;
+      border-color: var(--terracotta-deep);
+    }
+    .btn-primary:hover {
+      background: var(--terracotta-deep);
+      color: #fff;
+    }
+    .btn-ghost {
+      background: var(--card);
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    .btn-ghost:hover {
+      border-color: var(--ink-mute);
+      color: var(--ink);
+    }
+    .meta-line {
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+      color: var(--ink-mute);
+    }
+    .meta-line code {
+      font-family: var(--mono);
+      font-size: 0.84em;
+      background: var(--paper-deep);
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      color: var(--ink-soft);
+    }
+
+    section {
+      padding: 3rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    h2 {
+      font-size: clamp(1.4rem, 2.5vw, 1.75rem);
+      letter-spacing: -0.02em;
+      margin: 0 0 0.75rem;
+      font-weight: 600;
+    }
+    h3 {
+      font-size: 1.05rem;
+      margin: 0 0 0.4rem;
+      font-weight: 600;
+    }
+    .section-lead {
+      color: var(--ink-soft);
+      margin: 0 0 1.75rem;
+      max-width: 40rem;
+    }
+
+    .roles {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 820px) {
+      .roles { grid-template-columns: 1fr; }
+    }
+    .role-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.2rem 1.35rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .role-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--terracotta);
+    }
+    .role-num {
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--terracotta-deep);
+      margin-bottom: 0.5rem;
+    }
+    .role-card p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.98rem;
+    }
+
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      max-width: 36rem;
+    }
+    .flow-step {
+      display: grid;
+      grid-template-columns: 2rem 1fr;
+      gap: 0.85rem;
+      align-items: start;
+    }
+    .flow-dot {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      border: 2px solid var(--terracotta);
+      background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--terracotta-deep);
+      position: relative;
+      z-index: 1;
+    }
+    .flow-step:not(:last-child) .flow-dot::after {
+      content: "";
+      position: absolute;
+      top: 2rem;
+      left: 50%;
+      width: 2px;
+      height: calc(100% + 0.65rem);
+      background: var(--line);
+      transform: translateX(-50%);
+      z-index: 0;
+    }
+    .flow-body {
+      padding-bottom: 1.35rem;
+    }
+    .flow-body p {
+      margin: 0.2rem 0 0;
+      color: var(--ink-soft);
+      font-size: 0.96rem;
+    }
+
+    .diff-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.85rem;
+    }
+    .diff-list li {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 1rem 1.15rem;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.75rem;
+      align-items: start;
+    }
+    .diff-mark {
+      width: 0.55rem;
+      height: 0.55rem;
+      margin-top: 0.55rem;
+      border-radius: 50%;
+      background: var(--terracotta);
+      flex-shrink: 0;
+    }
+    .diff-list p { margin: 0.25rem 0 0; color: var(--ink-soft); font-size: 0.95rem; }
+
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 820px) {
+      .artifact-grid { grid-template-columns: 1fr; }
+    }
+    .artifact {
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: var(--radius);
+      padding: 1.2rem 1.15rem;
+    }
+    .artifact code {
+      font-family: var(--mono);
+      font-size: 0.92rem;
+      color: #f5c4b4;
+    }
+    .artifact p {
+      margin: 0.55rem 0 0;
+      color: #d6d3d1;
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+    .artifact-note {
+      margin-top: 1rem;
+      font-size: 0.92rem;
+      color: var(--ink-mute);
+    }
+
+    pre {
+      margin: 0;
+      padding: 1.1rem 1.15rem;
+      background: var(--ink);
+      color: #f5f5f4;
+      border-radius: var(--radius);
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.55;
+    }
+    .cmd-note {
+      margin-top: 0.85rem;
+      font-size: 0.92rem;
+      color: var(--ink-soft);
+    }
+
+    .boundary {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--terracotta);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.35rem;
+    }
+    .boundary ul {
+      margin: 0.6rem 0 0;
+      padding-left: 1.2rem;
+      color: var(--ink-soft);
+    }
+    .boundary li { margin: 0.25rem 0; }
+
+    .video-frame {
+      background: var(--ink);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      aspect-ratio: 16 / 9;
+    }
+    .video-frame video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #0c0a09;
+    }
+    .video-cap {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      color: var(--ink-mute);
+    }
+
+    .doc-links {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.65rem 1.5rem;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    @media (max-width: 600px) {
+      .doc-links { grid-template-columns: 1fr; }
+    }
+    .doc-links a { font-weight: 500; }
+
+    .ack p { color: var(--ink-soft); margin: 0 0 0.75rem; max-width: 40rem; }
+
+    .final-cta {
+      text-align: center;
+      padding: 3.5rem 0 4rem;
+      border-bottom: none;
+    }
+    .final-cta h2 { max-width: 18ch; margin-left: auto; margin-right: auto; }
+    .final-cta .section-lead { margin-left: auto; margin-right: auto; }
+
+    footer {
+      padding: 1.75rem 0 2.5rem;
+      color: var(--ink-mute);
+      font-size: 0.88rem;
+      border-top: 1px solid var(--line);
+    }
+    footer .wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.5rem;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    footer a { color: var(--ink-soft); }
+
+    /* Language visibility: both languages live in the DOM */
+    [data-lang-block] { display: none; }
+    html[data-lang="zh"] [data-lang-block="zh"],
+    html[data-lang="en"] [data-lang-block="en"] { display: contents; }
+    /* Elements that need block layout when active */
+    html[data-lang="zh"] p[data-lang-block="zh"],
+    html[data-lang="en"] p[data-lang-block="en"],
+    html[data-lang="zh"] h1[data-lang-block="zh"],
+    html[data-lang="en"] h1[data-lang-block="en"],
+    html[data-lang="zh"] h2[data-lang-block="zh"],
+    html[data-lang="en"] h2[data-lang-block="en"],
+    html[data-lang="zh"] h3[data-lang-block="zh"],
+    html[data-lang="en"] h3[data-lang-block="en"],
+    html[data-lang="zh"] span.eyebrow[data-lang-block="zh"],
+    html[data-lang="en"] span.eyebrow[data-lang-block="en"],
+    html[data-lang="zh"] div[data-lang-block="zh"],
+    html[data-lang="en"] div[data-lang-block="en"],
+    html[data-lang="zh"] ul[data-lang-block="zh"],
+    html[data-lang="en"] ul[data-lang-block="en"],
+    html[data-lang="zh"] ol[data-lang-block="zh"],
+    html[data-lang="en"] ol[data-lang-block="en"],
+    html[data-lang="zh"] pre[data-lang-block="zh"],
+    html[data-lang="en"] pre[data-lang-block="en"] {
+      display: block;
+    }
+    html[data-lang="zh"] span[data-lang-block="zh"]:not(.eyebrow),
+    html[data-lang="en"] span[data-lang-block="en"]:not(.eyebrow) {
+      display: inline;
+    }
+    html[data-lang="zh"] li[data-lang-block="zh"],
+    html[data-lang="en"] li[data-lang-block="en"] {
+      display: list-item;
+    }
+    /* For display:contents wrappers holding grid children */
+    html[data-lang="zh"] .roles[data-lang-block="zh"],
+    html[data-lang="en"] .roles[data-lang-block="en"],
+    html[data-lang="zh"] .artifact-grid[data-lang-block="zh"],
+    html[data-lang="en"] .artifact-grid[data-lang-block="en"],
+    html[data-lang="zh"] .diff-list[data-lang-block="zh"],
+    html[data-lang="en"] .diff-list[data-lang-block="en"],
+    html[data-lang="zh"] .flow[data-lang-block="zh"],
+    html[data-lang="en"] .flow[data-lang-block="en"],
+    html[data-lang="zh"] .doc-links[data-lang-block="zh"],
+    html[data-lang="en"] .doc-links[data-lang-block="en"],
+    html[data-lang="zh"] .cta-row[data-lang-block="zh"],
+    html[data-lang="en"] .cta-row[data-lang-block="en"] {
+      display: grid;
+    }
+    html[data-lang="zh"] .cta-row[data-lang-block="zh"],
+    html[data-lang="en"] .cta-row[data-lang-block="en"] {
+      display: flex;
+    }
+    html[data-lang="zh"] .flow[data-lang-block="zh"],
+    html[data-lang="en"] .flow[data-lang-block="en"] {
+      display: flex;
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">
+    <span data-lang-block="en">Skip to content</span>
+    <span data-lang-block="zh">跳到正文</span>
+  </a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand">
+        <a class="brand-name" href="https://github.com/MaxxxDong/codex-grok-orchestrator">codex-grok-orchestrator</a>
+        <span class="brand-sub">
+          <span data-lang-block="en">CLI / package: <code style="font-family:var(--mono);font-size:0.85em">grok-worker</code></span>
+          <span data-lang-block="zh">命令行 / 包名：<code style="font-family:var(--mono);font-size:0.85em">grok-worker</code></span>
+        </span>
+      </div>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- HERO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="wrap">
+        <span class="eyebrow" data-lang-block="en">Open-source orchestration framework</span>
+        <span class="eyebrow" data-lang-block="zh">开源编排框架</span>
+
+        <h1 id="hero-title">
+          <span data-lang-block="en">Codex dispatches.<br>Grok executes.<br>Evidence decides.</span>
+          <span data-lang-block="zh">Codex 分发。<br>Grok 执行。<br>证据裁决。</span>
+        </h1>
+
+        <p class="lede" data-lang-block="en">
+          A restrained boundary for repository work: the dispatcher scopes and reviews;
+          Grok runs inside disposable clones under lifecycle control; only a verified
+          three-file handoff can be accepted.
+        </p>
+        <p class="lede" data-lang-block="zh">
+          面向仓库任务的克制边界：调度器划定范围并审核；Grok 在 disposable clone 中、
+          受生命周期约束地执行；只有通过验证的三文件交接制品才可被接受。
+        </p>
+
+        <div class="cta-row" data-lang-block="en">
+          <a class="btn btn-primary" href="https://github.com/MaxxxDong/codex-grok-orchestrator">View on GitHub</a>
+          <a class="btn btn-ghost" href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md">Read the README</a>
+        </div>
+        <div class="cta-row" data-lang-block="zh">
+          <a class="btn btn-primary" href="https://github.com/MaxxxDong/codex-grok-orchestrator">在 GitHub 查看</a>
+          <a class="btn btn-ghost" href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md#中文">阅读 README</a>
+        </div>
+
+        <p class="meta-line" data-lang-block="en">
+          Public repo <code>codex-grok-orchestrator</code> · installable CLI <code>grok-worker</code> · Apache-2.0
+        </p>
+        <p class="meta-line" data-lang-block="zh">
+          公共仓库 <code>codex-grok-orchestrator</code> · 可安装 CLI <code>grok-worker</code> · Apache-2.0
+        </p>
+      </div>
+    </section>
+
+    <!-- THREE ROLES -->
+    <section aria-labelledby="roles-title">
+      <div class="wrap">
+        <h2 id="roles-title">
+          <span data-lang-block="en">Three roles, one boundary</span>
+          <span data-lang-block="zh">三个角色，一条边界</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Orchestration works when responsibilities stay separate. The worker never becomes the publisher.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          职责分离，编排才可靠。Worker 永远不会变成发布者。
+        </p>
+
+        <div class="roles" data-lang-block="en">
+          <article class="role-card">
+            <div class="role-num">01 · Dispatcher</div>
+            <h3>Codex / ACP</h3>
+            <p>Scopes the task, sets permissions, reviews artifacts, and decides whether anything is integrated.</p>
+          </article>
+          <article class="role-card">
+            <div class="role-num">02 · Lifecycle</div>
+            <h3>grok-worker</h3>
+            <p>Creates the disposable clone, enforces capacity and cleanup rules, and requires verifiable evidence.</p>
+          </article>
+          <article class="role-card">
+            <div class="role-num">03 · Executor</div>
+            <h3>Grok worker</h3>
+            <p>Analyzes or implements inside the clone under an explicit profile—and stops at evidence, not merge.</p>
+          </article>
+        </div>
+        <div class="roles" data-lang-block="zh">
+          <article class="role-card">
+            <div class="role-num">01 · 调度器</div>
+            <h3>Codex / ACP</h3>
+            <p>划定任务与权限，审核制品，并决定是否合入任何变更。</p>
+          </article>
+          <article class="role-card">
+            <div class="role-num">02 · 生命周期</div>
+            <h3>grok-worker</h3>
+            <p>创建 disposable clone，执行容量与清理规则，并强制要求可验证证据。</p>
+          </article>
+          <article class="role-card">
+            <div class="role-num">03 · 执行者</div>
+            <h3>Grok Worker</h3>
+            <p>在明确配置下于克隆内分析或实现——止于证据，而非合并。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ARCHITECTURE FLOW -->
+    <section aria-labelledby="flow-title">
+      <div class="wrap">
+        <h2 id="flow-title">
+          <span data-lang-block="en">Architecture flow</span>
+          <span data-lang-block="zh">架构流程</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Source stays canonical. Work happens in isolation. Acceptance waits on verified artifacts.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          源仓库始终为真相源。工作在隔离环境中发生。接受与否取决于已验证制品。
+        </p>
+
+        <div class="flow" data-lang-block="en">
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">1</div>
+            <div class="flow-body">
+              <h3>Dispatch</h3>
+              <p>The coordinator issues a one-shot run or a named session with an explicit permission profile.</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">2</div>
+            <div class="flow-body">
+              <h3>Isolate</h3>
+              <p><code style="font-family:var(--mono);font-size:0.9em">grok-worker</code> materializes a disposable clone; lifecycle metadata becomes the sole state authority.</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">3</div>
+            <div class="flow-body">
+              <h3>Execute</h3>
+              <p>Grok works inside the clone—analysis or implementation—without editing the source checkout.</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">4</div>
+            <div class="flow-body">
+              <h3>Evidence</h3>
+              <p>External artifacts are verified. Only then may a successful clone be reclaimed; the dispatcher reviews and decides.</p>
+            </div>
+          </div>
+        </div>
+        <div class="flow" data-lang-block="zh">
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">1</div>
+            <div class="flow-body">
+              <h3>分发</h3>
+              <p>协调者发出一次性任务或命名会话，并附带明确的权限配置。</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">2</div>
+            <div class="flow-body">
+              <h3>隔离</h3>
+              <p><code style="font-family:var(--mono);font-size:0.9em">grok-worker</code> 创建 disposable clone；lifecycle 元数据成为唯一状态权威。</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">3</div>
+            <div class="flow-body">
+              <h3>执行</h3>
+              <p>Grok 在克隆内进行分析或实现，不直接修改源仓库工作区。</p>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-dot" aria-hidden="true">4</div>
+            <div class="flow-body">
+              <h3>证据</h3>
+              <p>验证外部制品。成功克隆仅在验证通过后可回收；调度器负责审核并决定是否接受。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- DIFFERENTIATORS -->
+    <section aria-labelledby="diff-title">
+      <div class="wrap">
+        <h2 id="diff-title">
+          <span data-lang-block="en">What makes it different</span>
+          <span data-lang-block="zh">关键差异</span>
+        </h2>
+        <ul class="diff-list" data-lang-block="en">
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>Isolation first</h3>
+              <p>Every task runs in a disposable clone. The source repository remains the only project truth.</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>Lifecycle authority</h3>
+              <p>Progress files and completion events wake you up—they cannot fake success or authorize deletion.</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>Fail-closed cleanup</h3>
+              <p>Ambiguous paths, identity drift, and missing evidence keep directories; GC never guesses.</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>Configurable, not hard-locked</h3>
+              <p>Model and reasoning profile are explicit. Private dispatcher policy is not sold as a universal lock.</p>
+            </div>
+          </li>
+        </ul>
+        <ul class="diff-list" data-lang-block="zh">
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>先隔离</h3>
+              <p>每个任务在 disposable clone 中运行。源仓库始终是唯一的项目真相源。</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>生命周期权威</h3>
+              <p>进度文件与完成事件用于唤醒观察——不能伪造成功，也不能授权删除。</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>删除 fail-closed</h3>
+              <p>路径不明、身份漂移、证据不足时保留目录；GC 从不猜测。</p>
+            </div>
+          </li>
+          <li>
+            <span class="diff-mark" aria-hidden="true"></span>
+            <div>
+              <h3>可配置，非硬锁</h3>
+              <p>模型与推理强度显式可配。私有调度策略不会被伪装成全局硬锁。</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ARTIFACT CONTRACT -->
+    <section aria-labelledby="artifact-title">
+      <div class="wrap">
+        <h2 id="artifact-title">
+          <span data-lang-block="en">Verified three-file artifact contract</span>
+          <span data-lang-block="zh">已验证的三文件制品契约</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Success is reclaimable only after the external artifact directory passes verification.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          只有外部制品目录通过验证后，成功任务才允许回收克隆。
+        </p>
+
+        <div class="artifact-grid" data-lang-block="en">
+          <div class="artifact">
+            <code>changes.patch</code>
+            <p>Reviewable, replayable diff. Read-only work may produce a valid empty patch.</p>
+          </div>
+          <div class="artifact">
+            <code>worker.log</code>
+            <p>Lifecycle, session provenance, and full agent output for audit.</p>
+          </div>
+          <div class="artifact">
+            <code>verification.txt</code>
+            <p>Structured result, verification records, cleanup receipt, metrics, and hashes.</p>
+          </div>
+        </div>
+        <div class="artifact-grid" data-lang-block="zh">
+          <div class="artifact">
+            <code>changes.patch</code>
+            <p>可审核、可重放的差异。只读任务可以是有效空补丁。</p>
+          </div>
+          <div class="artifact">
+            <code>worker.log</code>
+            <p>生命周期、会话来源与完整 Agent 输出，便于审计。</p>
+          </div>
+          <div class="artifact">
+            <code>verification.txt</code>
+            <p>结构化结果、验证记录、清理回执、指标与哈希。</p>
+          </div>
+        </div>
+        <p class="artifact-note" data-lang-block="en">
+          Clone-local <code style="font-family:var(--mono);font-size:0.9em">.grok-output/result.json</code> is embedded into
+          <code style="font-family:var(--mono);font-size:0.9em">verification.txt</code>—not a fourth external artifact.
+        </p>
+        <p class="artifact-note" data-lang-block="zh">
+          克隆内 <code style="font-family:var(--mono);font-size:0.9em">.grok-output/result.json</code> 会嵌入
+          <code style="font-family:var(--mono);font-size:0.9em">verification.txt</code>——不是第四个外部制品。
+        </p>
+      </div>
+    </section>
+
+    <!-- QUICK START -->
+    <section aria-labelledby="start-title">
+      <div class="wrap">
+        <h2 id="start-title">
+          <span data-lang-block="en">One-shot quick start</span>
+          <span data-lang-block="zh">一次性任务快速开始</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Install the package, then run a bounded analysis task. Implementation mode uses the same shape.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          安装包后执行一次有界分析任务。实现模式使用相同形态。
+        </p>
+
+        <pre data-lang-block="en"><code>uv tool install .
+
+grok-worker status --source /path/to/repository --json
+
+grok-worker run \
+  --source /path/to/repository \
+  --mode analysis \
+  --task-id public-release-audit \
+  --prompt "Audit packaging and release readiness. Do not edit files."</code></pre>
+        <pre data-lang-block="zh"><code>uv tool install .
+
+grok-worker status --source /path/to/repository --json
+
+grok-worker run \
+  --source /path/to/repository \
+  --mode analysis \
+  --task-id public-release-audit \
+  --prompt "检查打包与发布就绪情况；不要修改文件。"</code></pre>
+
+        <p class="cmd-note" data-lang-block="en">
+          Named sessions use <code style="font-family:var(--mono);font-size:0.9em">session-start</code>,
+          <code style="font-family:var(--mono);font-size:0.9em">session-followup</code>, and
+          <code style="font-family:var(--mono);font-size:0.9em">session-finalize</code> with a task manifest.
+          See the repository README for full usage.
+        </p>
+        <p class="cmd-note" data-lang-block="zh">
+          命名会话使用 <code style="font-family:var(--mono);font-size:0.9em">session-start</code>、
+          <code style="font-family:var(--mono);font-size:0.9em">session-followup</code> 与
+          <code style="font-family:var(--mono);font-size:0.9em">session-finalize</code>，并配合任务清单。
+          完整用法见仓库 README。
+        </p>
+      </div>
+    </section>
+
+    <!-- SAFETY -->
+    <section aria-labelledby="safety-title">
+      <div class="wrap">
+        <h2 id="safety-title">
+          <span data-lang-block="en">Safety boundary</span>
+          <span data-lang-block="zh">安全边界</span>
+        </h2>
+        <div class="boundary">
+          <p data-lang-block="en"><strong>Workers produce evidence. They do not merge, push, publish, submit, or self-approve.</strong></p>
+          <p data-lang-block="zh"><strong>Worker 只交付证据，不合并、不推送、不发布、不提交外部事务、不自行批准自己的工作。</strong></p>
+          <ul data-lang-block="en">
+            <li>No provider credentials, OAuth state, or relay endpoints in the public core.</li>
+            <li>Subagents are disabled by default; enable only deliberately.</li>
+            <li>Deletion protects the source, home, artifacts, shared cache, and disposable root.</li>
+            <li>Private overlays own competition gates, org approval chains, and personal paths.</li>
+          </ul>
+          <ul data-lang-block="zh">
+            <li>公共核心不包含服务商凭据、OAuth 状态或中转地址。</li>
+            <li>默认关闭嵌套子代理；仅在有意时开启。</li>
+            <li>删除保护源仓库、家目录、制品目录、共享缓存与 disposable 根目录。</li>
+            <li>比赛 Gate、组织审批链与个人路径属于私有叠加层。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIDEO -->
+    <section aria-labelledby="video-title">
+      <div class="wrap narrow">
+        <h2 id="video-title">
+          <span data-lang-block="en">Introduction</span>
+          <span data-lang-block="zh">介绍视频</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          A short overview of the orchestration boundary (Chinese narration).
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          编排边界的简短介绍（中文旁白）。
+        </p>
+        <div class="video-frame">
+          <video
+            controls
+            playsinline
+            preload="metadata"
+            poster="assets/grok-worker-intro-poster.jpg"
+            aria-label="grok-worker introduction video">
+            <source src="assets/grok-worker-intro-zh-final.mp4" type="video/mp4">
+          </video>
+        </div>
+        <p class="video-cap" data-lang-block="en">
+          Media: <code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-zh-final.mp4</code>
+          · poster <code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-poster.jpg</code>
+        </p>
+        <p class="video-cap" data-lang-block="zh">
+          媒体：<code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-zh-final.mp4</code>
+          · 海报 <code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-poster.jpg</code>
+        </p>
+      </div>
+    </section>
+
+    <!-- DOCS -->
+    <section aria-labelledby="docs-title">
+      <div class="wrap">
+        <h2 id="docs-title">
+          <span data-lang-block="en">Documentation</span>
+          <span data-lang-block="zh">文档</span>
+        </h2>
+        <ul class="doc-links" data-lang-block="en">
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md">README (bilingual)</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/design-principles.md">Design principles</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/operations.md">Operations</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SKILL.md">Skill integration</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/releases/release-notes.md">Release notes</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SECURITY.md">Security policy</a></li>
+        </ul>
+        <ul class="doc-links" data-lang-block="zh">
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md#中文">README（双语）</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/design-principles.md">设计原则</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/operations.md">运维文档</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SKILL.md">Skill 接入</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/releases/release-notes.md">发布说明</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SECURITY.md">安全策略</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ACK -->
+    <section aria-labelledby="ack-title">
+      <div class="wrap">
+        <h2 id="ack-title">
+          <span data-lang-block="en">Acknowledgements</span>
+          <span data-lang-block="zh">致谢</span>
+        </h2>
+        <div class="ack">
+          <p data-lang-block="en">
+            The public boundary was informed by the thin integration approach in
+            <a href="https://github.com/stdevMac/grok-in-codex">stdevMac/grok-in-codex</a>
+            and the orchestration/release discipline in
+            <a href="https://github.com/Cjbuilds/Codex-Orchestration">Cjbuilds/Codex-Orchestration</a>.
+            No source code from either project is included.
+          </p>
+          <p data-lang-block="zh">
+            公共边界参考了
+            <a href="https://github.com/stdevMac/grok-in-codex">stdevMac/grok-in-codex</a>
+            的轻量接入思路，以及
+            <a href="https://github.com/Cjbuilds/Codex-Orchestration">Cjbuilds/Codex-Orchestration</a>
+            的编排与发布纪律。未复制上述项目的任何源代码。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="final-cta" aria-labelledby="cta-title">
+      <div class="wrap">
+        <h2 id="cta-title">
+          <span data-lang-block="en">Start from the source</span>
+          <span data-lang-block="zh">从源码开始</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Clone the public repository, install <code style="font-family:var(--mono);font-size:0.9em">grok-worker</code>,
+          and keep acceptance on the reviewer’s desk.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          克隆公共仓库，安装 <code style="font-family:var(--mono);font-size:0.9em">grok-worker</code>，
+          把是否接受留在审核者一侧。
+        </p>
+        <div class="cta-row" style="justify-content:center" data-lang-block="en">
+          <a class="btn btn-primary" href="https://github.com/MaxxxDong/codex-grok-orchestrator">GitHub: MaxxxDong/codex-grok-orchestrator</a>
+        </div>
+        <div class="cta-row" style="justify-content:center" data-lang-block="zh">
+          <a class="btn btn-primary" href="https://github.com/MaxxxDong/codex-grok-orchestrator">GitHub：MaxxxDong/codex-grok-orchestrator</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span data-lang-block="en">Apache License 2.0 · package <code style="font-family:var(--mono);font-size:0.9em">grok-worker</code></span>
+      <span data-lang-block="zh">Apache License 2.0 · 包名 <code style="font-family:var(--mono);font-size:0.9em">grok-worker</code></span>
+      <a href="https://github.com/MaxxxDong/codex-grok-orchestrator">github.com/MaxxxDong/codex-grok-orchestrator</a>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var STORAGE_KEY = "codex-grok-orchestrator-lang";
+      var html = document.documentElement;
+      var btnZh = document.getElementById("lang-zh");
+      var btnEn = document.getElementById("lang-en");
+
+      function normalizeLang(value) {
+        if (!value) return null;
+        var v = String(value).toLowerCase();
+        if (v === "zh" || v.indexOf("zh") === 0) return "zh";
+        if (v === "en" || v.indexOf("en") === 0) return "en";
+        return null;
+      }
+
+      function langFromQuery() {
+        try {
+          var params = new URLSearchParams(window.location.search);
+          return normalizeLang(params.get("lang"));
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function langFromStorage() {
+        try {
+          return normalizeLang(window.localStorage.getItem(STORAGE_KEY));
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function langFromBrowser() {
+        var nav = navigator.languages && navigator.languages.length
+          ? navigator.languages[0]
+          : navigator.language || navigator.userLanguage || "en";
+        return normalizeLang(nav) || "en";
+      }
+
+      function resolveInitialLang() {
+        // URL query takes precedence over stored preference and browser locale.
+        return langFromQuery() || langFromStorage() || langFromBrowser() || "en";
+      }
+
+      function applyLang(lang, updateUrl) {
+        var active = lang === "zh" ? "zh" : "en";
+        html.setAttribute("lang", active === "zh" ? "zh-CN" : "en");
+        html.setAttribute("data-lang", active);
+        if (btnZh) btnZh.setAttribute("aria-pressed", active === "zh" ? "true" : "false");
+        if (btnEn) btnEn.setAttribute("aria-pressed", active === "en" ? "true" : "false");
+        try {
+          window.localStorage.setItem(STORAGE_KEY, active);
+        } catch (e) { /* ignore */ }
+        if (updateUrl) {
+          try {
+            var url = new URL(window.location.href);
+            url.searchParams.set("lang", active);
+            window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+          } catch (e) { /* ignore */ }
+        }
+        var titleEn = "codex-grok-orchestrator — Codex dispatches. Grok executes. Evidence decides.";
+        var titleZh = "codex-grok-orchestrator — Codex 分发 · Grok 执行 · 证据裁决";
+        document.title = active === "zh" ? titleZh : titleEn;
+      }
+
+      function onToggle(event) {
+        var target = event.currentTarget;
+        var next = target && target.getAttribute("data-set-lang");
+        if (next) applyLang(next, true);
+      }
+
+      if (btnZh) btnZh.addEventListener("click", onToggle);
+      if (btnEn) btnEn.addEventListener("click", onToggle);
+
+      applyLang(resolveInitialLang(), false);
+    })();
+  </script>
+</body>
+</html>

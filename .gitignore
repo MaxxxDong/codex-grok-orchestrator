@@ -1,0 +1,15 @@
+.DS_Store
+.grok-artifacts/
+.grok-disposable/
+.grok-worker/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.egg-info/
+*.py[cod]
+build/
+dist/
+htmlcov/
+coverage.xml
