@@ -17,7 +17,7 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-14
 
-Initial public release of **codex-grok-orchestrator**: bilingual README and GitHub Pages landing page, configurable public `grok-worker` engine, and verified three-file handoff artifacts. Full history: [release notes](docs/releases/release-notes.md).
+Initial public release of **codex-grok-orchestrator**: bilingual README and GitHub Pages landing page, configurable public `grok-worker` engine, and verified three-file handoff artifacts. Dirty-source baseline commits use a command-scoped synthetic Git identity so Linux CI no longer depends on host Git config. Full history: [release notes](docs/releases/release-notes.md).
 
 ---
 

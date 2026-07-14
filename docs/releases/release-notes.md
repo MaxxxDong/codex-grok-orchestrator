@@ -40,6 +40,10 @@ Initial standalone public repository for Codex–Grok orchestration.
 
 - macOS and Linux supported; native Windows experimental / unsupported (prefer WSL).
 
+**Portability**
+
+- Lifecycle-owned dirty-source baseline commits use a command-scoped synthetic Git identity (`grok-worker` / `grok-worker@localhost`) so Ubuntu runners without global `user.name`/`user.email` succeed the same way as macOS.
+
 **License**
 
 - Apache License 2.0.
@@ -70,6 +74,10 @@ Initial standalone public repository for Codex–Grok orchestration.
 **平台**
 
 - 支持 macOS 与 Linux；原生 Windows 为实验性 / 暂不支持（建议 WSL）。
+
+**可移植性**
+
+- 生命周期托管的 dirty-source 基线提交使用命令级合成 Git 身份（`grok-worker` / `grok-worker@localhost`），使无全局 `user.name`/`user.email` 的 Ubuntu runner 与 macOS 行为一致。
 
 **许可证**
 

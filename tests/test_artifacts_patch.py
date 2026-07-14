@@ -147,3 +147,55 @@ def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
     assert "from-worker" in text
     assert "only-untracked" not in text
     assert "v2-modified" not in text
+
+
+def test_dirty_baseline_uses_lifecycle_owned_git_identity(tmp_path: Path) -> None:
+    """Dirty-baseline commit uses stable grok-worker identity, not host/operator."""
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, base, fp = create_workspace(src, disp, "d-id", include_dirty=True)
+    assert fp is not None
+    assert base
+
+    author = subprocess.check_output(
+        ["git", "-C", str(clone), "log", "-1", "--format=%an <%ae>", base],
+        text=True,
+    ).strip()
+    committer = subprocess.check_output(
+        ["git", "-C", str(clone), "log", "-1", "--format=%cn <%ce>", base],
+        text=True,
+    ).strip()
+    expected = "grok-worker <grok-worker@localhost>"
+    assert author == expected
+    assert committer == expected
+    # Must not inherit the source repo test identity used by init_git_repo.
+    assert "test@example.com" not in author
+    assert "test@example.com" not in committer
+    assert author != "Test <test@example.com>"
+
+    subject = subprocess.check_output(
+        ["git", "-C", str(clone), "log", "-1", "--format=%s", base],
+        text=True,
+    ).strip()
+    assert subject == "lifecycle dirty source baseline"
+
+    # Identity is command-scoped: do not leave grok-worker in clone local config.
+    local_name = subprocess.run(
+        ["git", "-C", str(clone), "config", "--local", "--get", "user.name"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if local_name.returncode == 0:
+        assert local_name.stdout.strip() != "grok-worker"
+    local_email = subprocess.run(
+        ["git", "-C", str(clone), "config", "--local", "--get", "user.email"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if local_email.returncode == 0:
+        assert local_email.stdout.strip() != "grok-worker@localhost"

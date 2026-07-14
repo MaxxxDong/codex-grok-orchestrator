@@ -147,11 +147,17 @@ def _apply_dirty_to_clone(source: Path, clone: Path) -> str:
         if src_f.is_symlink() or src_f.is_file():
             _copy_path(src_f, clone / rel)
     subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True, capture_output=True)
+    # Command-scoped identity only: dirty-baseline commits must not depend on
+    # host/global Git config (Ubuntu runners often have none) or mutate clone config.
     subprocess.run(
         [
             "git",
             "-C",
             str(clone),
+            "-c",
+            "user.name=grok-worker",
+            "-c",
+            "user.email=grok-worker@localhost",
             "commit",
             "--allow-empty",
             "-m",
