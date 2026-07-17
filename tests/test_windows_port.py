@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -268,6 +269,44 @@ def test_windows_metadata_failure_reaps_started_acpx(
 
     assert child.terminated
     assert child.waited
+
+
+def test_windows_reaps_descendants_after_acpx_parent_exits() -> None:
+    base_python = getattr(sys, "_base_executable", sys.executable)
+    parent_code = (
+        "import subprocess,sys; "
+        "child=subprocess.Popen([sys._base_executable,'-c','import time; time.sleep(60)'],"
+        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "print(child.pid,flush=True)"
+    )
+    parent = subprocess.Popen(
+        [base_python, "-c", parent_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+    )
+    assert parent.stdout is not None
+    child_pid = int(parent.stdout.readline().strip())
+    parent.wait(timeout=5)
+    assert process_start_token(child_pid) is not None
+
+    try:
+        from grok_worker.worker_exec import _reap_process_tree
+
+        _reap_process_tree(parent)
+        deadline = time.monotonic() + 5
+        while process_start_token(child_pid) is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert process_start_token(child_pid) is None
+    finally:
+        if process_start_token(child_pid) is not None:
+            subprocess.run(
+                ["taskkill", "/PID", str(child_pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+            )
 
 
 def test_windows_six_workers_run_in_parallel(tmp_path: Path) -> None:

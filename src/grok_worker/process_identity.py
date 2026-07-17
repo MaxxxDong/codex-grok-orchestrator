@@ -8,6 +8,73 @@ import sys
 from pathlib import Path
 
 
+def windows_descendant_pids(root_pid: int) -> list[int]:
+    """Snapshot live Windows descendants, including children of an exited root."""
+    if sys.platform != "win32" or root_pid <= 0:
+        return []
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_snapshot = kernel32.CreateToolhelp32Snapshot
+    create_snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    create_snapshot.restype = wintypes.HANDLE
+    process_first = kernel32.Process32FirstW
+    process_first.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    process_first.restype = wintypes.BOOL
+    process_next = kernel32.Process32NextW
+    process_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    process_next.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    snapshot = create_snapshot(0x00000002, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
+        return []
+    relationships: list[tuple[int, int]] = []
+    entry = ProcessEntry32W()
+    entry.dwSize = ctypes.sizeof(entry)
+    try:
+        if not process_first(snapshot, ctypes.byref(entry)):
+            return []
+        while True:
+            relationships.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID)))
+            if not process_next(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        close_handle(snapshot)
+
+    descendants: list[int] = []
+    frontier = {root_pid}
+    seen = {root_pid}
+    while frontier:
+        children = {
+            pid for pid, parent_pid in relationships if parent_pid in frontier and pid not in seen
+        }
+        if not children:
+            break
+        descendants.extend(sorted(children))
+        seen.update(children)
+        frontier = children
+    return descendants
+
+
 def _windows_process_start_token(pid: int) -> str | None:
     import ctypes
     from ctypes import wintypes

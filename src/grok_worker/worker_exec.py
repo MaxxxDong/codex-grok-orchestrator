@@ -16,7 +16,11 @@ from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text, read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState
 from grok_worker.paths import meta_dir, meta_path
-from grok_worker.process_identity import capture_identity, process_start_token
+from grok_worker.process_identity import (
+    capture_identity,
+    process_start_token,
+    windows_descendant_pids,
+)
 from grok_worker.prompt_cache import OneShotModeError, build_one_shot_prompt
 from grok_worker.run_config import RunConfig, RunOutcome, build_acpx_cmd
 from grok_worker.settings import agent_policy_environment
@@ -28,18 +32,24 @@ class Interrupt(Exception):
 
 def _reap_process_tree(proc: subprocess.Popen[Any] | None) -> None:
     """Best-effort bounded cleanup for an ACP process and its descendants."""
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
     if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        targets = [proc.pid] if proc.poll() is None else []
+        targets.extend(windows_descendant_pids(proc.pid))
+        for pid in targets:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    if proc.poll() is not None:
+        return
     if proc.poll() is None:
         try:
             proc.terminate()
@@ -168,6 +178,7 @@ def execute_worker(
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))
             acpx_exit = int(child_proc.wait())
+        _reap_process_tree(child_proc)
         child_proc = None
         meta.acpx_exit_code = acpx_exit
         try:
