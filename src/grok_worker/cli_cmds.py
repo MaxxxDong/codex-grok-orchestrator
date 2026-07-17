@@ -17,7 +17,11 @@ from grok_worker.cache_policy import (
 from grok_worker.capacity import CapacityError, ConcurrencyError
 from grok_worker.completion_events import events_to_payload, list_completion_events
 from grok_worker.config_apply import ConfigApplyError, apply_config
-from grok_worker.constants import DEFAULT_CAP_BYTES, DEFAULT_FAILURE_RETAIN_HOURS
+from grok_worker.constants import (
+    DEFAULT_CAP_BYTES,
+    DEFAULT_FAILURE_RETAIN_HOURS,
+    MAX_CONCURRENT_WORKERS,
+)
 from grok_worker.gc import gc_disposable_root, is_active
 from grok_worker.legacy import LegacyClass, LegacyError, import_legacy, list_unmarked
 from grok_worker.models import WorkerMeta
@@ -67,6 +71,13 @@ def cmd_run(
     failure_retain_hours: int = typer.Option(
         DEFAULT_FAILURE_RETAIN_HOURS, "--failure-retain-hours"
     ),
+    max_workers: int = typer.Option(
+        MAX_CONCURRENT_WORKERS,
+        "--max-workers",
+        envvar="GROK_WORKER_MAX_WORKERS",
+        min=1,
+        help="Maximum active workers admitted under this disposable root",
+    ),
     cap_bytes: int = typer.Option(DEFAULT_CAP_BYTES, "--cap-bytes"),
     no_prepare_deps: bool = typer.Option(False, "--no-prepare-deps"),
     include_dirty: bool = typer.Option(
@@ -107,6 +118,7 @@ def cmd_run(
         reasoning_effort=reasoning_effort or default_reasoning_effort(),
         allow_subagents=allow_subagents,
         failure_retain_hours=failure_retain_hours,
+        max_workers=max_workers,
         prepare_deps=not no_prepare_deps,
         include_dirty=include_dirty,
         cache_max_bytes=cache_max_bytes,
@@ -298,9 +310,7 @@ def cmd_config_apply(
         "--smoke-argv-json",
         help="JSON array of argv strings for smoke (shell=False)",
     ),
-    smoke_timeout: float = typer.Option(
-        30.0, "--smoke-timeout", help="Smoke timeout seconds"
-    ),
+    smoke_timeout: float = typer.Option(30.0, "--smoke-timeout", help="Smoke timeout seconds"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Atomically apply a TOML candidate with smoke test and byte-level rollback."""

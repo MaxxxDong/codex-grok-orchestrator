@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -12,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
+
+_WINDOWS_REPLACE_ATTEMPTS = 30
+_WINDOWS_REPLACE_RETRY_SECONDS = 0.1
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
 
 
 class WorkerState(StrEnum):
@@ -55,6 +60,22 @@ def dt_from_iso(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def atomic_replace(source: str | Path, target: Path) -> None:
+    """Replace a file atomically, retrying only transient Windows sharing failures."""
+    for attempt in range(_WINDOWS_REPLACE_ATTEMPTS if os.name == "nt" else 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            transient = (
+                os.name == "nt"
+                and getattr(exc, "winerror", None) in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+            )
+            if not transient or attempt == _WINDOWS_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_WINDOWS_REPLACE_RETRY_SECONDS)
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write via tempfile in the same directory then os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +85,7 @@ def atomic_write_text(path: Path, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_name, path)
+        atomic_replace(tmp_name, path)
     except Exception:
         try:
             os.unlink(tmp_name)

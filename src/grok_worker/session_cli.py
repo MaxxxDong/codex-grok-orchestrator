@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from grok_worker.constants import MAX_CONCURRENT_WORKERS
 from grok_worker.paths import (
     default_artifact_root,
     default_disposable_root,
@@ -32,6 +33,7 @@ def _config(
     reasoning_effort: str | None,
     allow_subagents: bool,
     timeout: int,
+    max_workers: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     resolved_source = source.resolve()
@@ -64,6 +66,7 @@ def _config(
         reasoning_effort=reasoning_effort or default_reasoning_effort(),
         allow_subagents=allow_subagents,
         timeout=timeout,
+        max_workers=max_workers,
         prepare_deps=not no_prepare_deps,
     )
 
@@ -103,6 +106,7 @@ def _options(
     reasoning_effort: str | None,
     allow_subagents: bool,
     timeout: int,
+    max_workers: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     return _config(
@@ -120,6 +124,7 @@ def _options(
         reasoning_effort,
         allow_subagents,
         timeout,
+        max_workers,
         no_prepare_deps,
     )
 
@@ -140,6 +145,12 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
         reasoning_effort: str | None = typer.Option(None, "--reasoning-effort"),
         allow_subagents: bool = typer.Option(False, "--allow-subagents"),
         timeout: int = typer.Option(1800, "--timeout"),
+        max_workers: int = typer.Option(
+            MAX_CONCURRENT_WORKERS,
+            "--max-workers",
+            envvar="GROK_WORKER_MAX_WORKERS",
+            min=1,
+        ),
         no_prepare_deps: bool = typer.Option(False, "--no-prepare-deps"),
     ) -> None:
         """Operate one immutable logical-task named session."""
@@ -160,6 +171,7 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
                 reasoning_effort,
                 allow_subagents,
                 timeout,
+                max_workers,
                 no_prepare_deps,
             ),
         )

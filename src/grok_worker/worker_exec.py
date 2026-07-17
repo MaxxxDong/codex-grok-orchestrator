@@ -26,6 +26,38 @@ class Interrupt(Exception):
     """Raised when SIGINT/SIGTERM arrives during the worker run."""
 
 
+def _reap_process_tree(proc: subprocess.Popen[Any] | None) -> None:
+    """Best-effort bounded cleanup for an ACP process and its descendants."""
+    if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def execute_worker(
     cfg: RunConfig,
     clone: Path,
@@ -187,11 +219,10 @@ def execute_worker(
             message=str(exc),
         )
     finally:
+        _reap_process_tree(child_proc)
         signal.signal(signal.SIGINT, prev_int)
         signal.signal(signal.SIGTERM, prev_term)
         wlock.release()
         cache_lease.release()
         if not cfg.skip_post_gc:
-            gc_disposable_root(
-                disposable, protected=protected, shared_cache_root=shared
-            )
+            gc_disposable_root(disposable, protected=protected, shared_cache_root=shared)

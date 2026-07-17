@@ -9,7 +9,6 @@ from grok_worker.cache_policy import CachePolicy, ensure_cache_capacity
 from grok_worker.capacity import enforce_cap, enforce_concurrency
 from grok_worker.clone import create_workspace
 from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
-from grok_worker.deps import prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run
 from grok_worker.gc import gc_disposable_root
 from grok_worker.locks import root_lock, worker_lock
@@ -59,7 +58,7 @@ def start_session(cfg: SessionConfig) -> SessionOutcome:
     protected = [source, artifacts, cache, Path.home(), disposable]
     gc_disposable_root(disposable, protected=protected, shared_cache_root=cache)
     with root_lock(disposable):
-        enforce_concurrency(disposable, 10)
+        enforce_concurrency(disposable, cfg.max_workers)
         enforce_cap(disposable, cfg.cap_bytes)
         clone, base, fingerprint = create_workspace(source, disposable, manifest.task_id)
         now = dt_to_iso(utc_now()) or ""
@@ -93,8 +92,6 @@ def start_session(cfg: SessionConfig) -> SessionOutcome:
     )
     state.write(session_state_path(disposable, manifest.task_id))
     prompt = bundle.full_prompt
-    if cfg.prepare_deps:
-        prompt += "\n" + worker_env_exports(prepare_shared_env(clone, cache))
     prompt_turn(cfg, state, prompt, ensure=True)
     return SessionOutcome(manifest.task_id, state.status, state.prompt_count, str(clone))
 

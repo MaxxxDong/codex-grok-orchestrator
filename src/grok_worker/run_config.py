@@ -45,6 +45,8 @@ class RunConfig:
     cache_ttl_hours: float = DEFAULT_CACHE_TTL_HOURS
 
     def __post_init__(self) -> None:
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
         if not self.model:
             self.model = default_model()
         if not self.reasoning_effort:

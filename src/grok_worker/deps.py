@@ -12,6 +12,7 @@ from pathlib import Path
 from shutil import which
 
 from grok_worker.locks import fingerprint_lock
+from grok_worker.models import atomic_replace
 
 SYNC_CONTRACT: tuple[str, ...] = (
     "--frozen",
@@ -83,8 +84,12 @@ def build_uv_sync_cmd(source: Path, *, has_lock: bool) -> list[str]:
 
 
 def _interpreter_present(venv: Path) -> bool:
-    for name in ("python", "python3"):
-        p = venv / "bin" / name
+    candidates = (
+        venv / "Scripts" / "python.exe",
+        venv / "bin" / "python",
+        venv / "bin" / "python3",
+    )
+    for p in candidates:
         if p.is_file() and not p.is_symlink():
             return True
         # allow symlink to real interpreter inside shared env
@@ -122,7 +127,7 @@ def _write_ready_marker(venv: Path, fingerprint: str) -> None:
     tmp = venv / f".{READY_MARKER_NAME}.tmp.{os.getpid()}"
     payload = json.dumps(_marker_payload(fingerprint), sort_keys=True, indent=2) + "\n"
     tmp.write_text(payload, encoding="utf-8")
-    os.replace(tmp, marker)
+    atomic_replace(tmp, marker)
 
 
 def prepare_shared_env(

@@ -38,10 +38,11 @@ Native Windows PowerShell:
 $repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
 $promptFile = Join-Path $env:TEMP "grok-worker-task.md"
 grok-worker status --source $repo --json
-grok-worker run --source $repo --mode implementation --task-id focused-change --prompt-file $promptFile
+grok-worker run --source $repo --mode implementation --task-id focused-change --prompt-file $promptFile --max-workers 24
 ```
 
 The prompt file must already exist. Prefer a prompt file for multiline tasks so PowerShell, batch wrappers, and ACP receive byte-identical text.
+Use the same positive `--max-workers` value for every dispatcher sharing a disposable root when planning wide fan-out. Admission remains serialized only for clone creation; admitted workers execute concurrently. The byte cap and provider rate limits remain independent safety boundaries.
 
 POSIX shells:
 
@@ -82,6 +83,7 @@ The public core does not hard-lock one model or provider setup. Configure it wit
 - `GROK_WORKER_MCP_CONFIG`
 - `GROK_WORKER_GROK_BIN`
 - `GROK_WORKER_CACHE_ROOT`
+- `GROK_WORKER_MAX_WORKERS` (or `--max-workers`; default `10`)
 
 Subagents are disabled by default. Enable them explicitly with `--allow-subagents` only when nested delegation is intentional.
 

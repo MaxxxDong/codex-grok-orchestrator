@@ -12,8 +12,8 @@ from grok_worker.cache_policy import (
     DEFAULT_CACHE_TTL_HOURS,
     cache_use_lease,
 )
-from grok_worker.constants import DEFAULT_CAP_BYTES
-from grok_worker.deps import prepare_shared_env
+from grok_worker.constants import DEFAULT_CAP_BYTES, MAX_CONCURRENT_WORKERS
+from grok_worker.deps import prepare_shared_env, worker_env_exports
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
@@ -48,11 +48,14 @@ class SessionConfig:
     allow_subagents: bool = False
     timeout: int = 1800
     prepare_deps: bool = True
+    max_workers: int = MAX_CONCURRENT_WORKERS
     cap_bytes: int = DEFAULT_CAP_BYTES
     cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES
     cache_ttl_hours: float = DEFAULT_CACHE_TTL_HOURS
 
     def __post_init__(self) -> None:
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
         if not self.model:
             self.model = default_model()
         if not self.reasoning_effort:
@@ -123,7 +126,6 @@ def invoke(command: list[str], log: Path, env: dict[str, str]) -> int:
 def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure: bool) -> int:
     clone = Path(state.clone_realpath)
     prompt_file = meta_dir(clone) / f"prompt-{state.prompt_count + 1:03d}.md"
-    prompt_file.write_text(prompt, encoding="utf-8")
     log = cfg.artifact_root / f".run-log-{state.task_id}" / "agent.log"
     env = os.environ.copy()
     env.update(
@@ -140,6 +142,10 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
         dep_env: dict[str, str] = {}
         if cfg.prepare_deps:
             dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
+        effective_prompt = prompt
+        if ensure and dep_env:
+            effective_prompt += "\n" + worker_env_exports(dep_env)
+        prompt_file.write_text(effective_prompt, encoding="utf-8")
         env.update(dep_env)
         common = common_command(cfg, clone)
         if ensure:

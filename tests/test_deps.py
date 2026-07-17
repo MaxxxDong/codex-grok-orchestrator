@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -146,6 +147,37 @@ def test_prepare_uses_exact_frozen_once(tmp_path: Path) -> None:
             env2 = prepare_shared_env(source, shared)
     assert len(calls) == 1
     assert env2["UV_PROJECT_ENVIRONMENT"] == env["UV_PROJECT_ENVIRONMENT"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows venv layout")
+def test_prepare_accepts_windows_scripts_interpreter(tmp_path: Path) -> None:
+    source, shared = tmp_path / "src", tmp_path / "shared"
+    source.mkdir()
+    _write_pyproject(source)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        env = kwargs.get("env") or {}
+        venv = Path(env["UV_PROJECT_ENVIRONMENT"])
+        scripts = venv / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "python.exe").write_bytes(b"windows-python")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    with mock.patch("grok_worker.deps.subprocess.run", side_effect=fake_run):
+        with mock.patch("grok_worker.deps.which", return_value="C:\\Tools\\uv.exe"):
+            first = prepare_shared_env(source, shared)
+            second = prepare_shared_env(source, shared)
+
+    assert len(calls) == 1
+    assert first["UV_PROJECT_ENVIRONMENT"] == second["UV_PROJECT_ENVIRONMENT"]
 
 
 def test_frozen_failure_no_retry(tmp_path: Path) -> None:

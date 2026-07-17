@@ -16,7 +16,7 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
     script = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
-        import json, os, sys
+        import json, os, sys, time
         from pathlib import Path
 
         behavior = os.environ.get("FAKE_ACPX_BEHAVIOR", {behavior!r})
@@ -60,6 +60,34 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
                 }}],
             )
             print("fake acpx success")
+            sys.exit(0)
+        if behavior == "barrier_success":
+            barrier = Path(os.environ["FAKE_ACPX_BARRIER_DIR"])
+            barrier.mkdir(parents=True, exist_ok=True)
+            task_id = os.environ["GROK_WORKER_TASK_ID"]
+            (barrier / task_id).write_text("ready\\n", encoding="utf-8")
+            expected = int(os.environ["FAKE_ACPX_BARRIER_EXPECTED"])
+            deadline = time.monotonic() + 15
+            while len(list(barrier.iterdir())) < expected and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if len(list(barrier.iterdir())) < expected:
+                print("parallel barrier timed out", file=sys.stderr)
+                sys.exit(93)
+            (cwd / "feature.txt").write_text("added\\n", encoding="utf-8")
+            (out / "verification" / "tests.txt").write_text("ok\\n", encoding="utf-8")
+            write_result(
+                schema_version=1,
+                task_completed=True,
+                status="completed",
+                summary="parallel worker completed",
+                findings=[],
+                verification=[{{
+                    "command": "pytest",
+                    "exit_code": 0,
+                    "log_path": ".grok-output/verification/tests.txt",
+                }}],
+            )
+            print("parallel fake acpx success")
             sys.exit(0)
         if behavior == "success_analysis":
             write_result(

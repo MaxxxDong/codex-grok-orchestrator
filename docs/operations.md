@@ -37,6 +37,14 @@ Do not maintain a second WSL Grok configuration for a native deployment. Keep
 backup files if required, but only the Windows path above is an active source of
 provider/model settings.
 
+For parallel dispatch, pass the same positive `--max-workers` value to all
+one-shot and named-session starts sharing a disposable root, or set
+`GROK_WORKER_MAX_WORKERS`. The default is 10; higher values change admission,
+not the independent disposable-byte cap or upstream provider rate limits.
+Clone admission is protected by a short root lock, while worker execution and
+fingerprint-distinct dependency work remain concurrent. Same-fingerprint uv
+preparation is serialized once and then reused by all admitted workers.
+
 ## 1. Completion-event notifications
 
 ### What it is
