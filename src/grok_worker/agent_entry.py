@@ -61,12 +61,6 @@ def _child_environment() -> dict[str, str]:
     return env
 
 
-def _creation_flags(command: list[str]) -> int:
-    if os.name == "nt" and Path(command[0]).suffix.lower() == ".exe":
-        return int(subprocess.CREATE_NEW_CONSOLE)
-    return 0
-
-
 def main() -> int:
     if not os.environ.get("GROK_WORKER_LIFECYCLE") and not env_flag(
         "GROK_WORKER_ALLOW_DIRECT_AGENT", default=False
@@ -82,11 +76,7 @@ def main() -> int:
         completed = subprocess.run(
             command,
             check=False,
-            creationflags=_creation_flags(command),
             env=_child_environment(),
-            stdin=sys.stdin,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
             startupinfo=hidden_startup_info(),
         )
     except (OSError, ValueError) as exc:

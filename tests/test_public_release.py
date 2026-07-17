@@ -150,20 +150,14 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setenv("GROK_WORKER_LIFECYCLE", "1")
-    monkeypatch.setenv("GROK_WORKER_GROK_BIN", r"C:\tools\grok.exe")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
     monkeypatch.setattr(agent_entry.subprocess, "run", fake_run)
 
     assert agent_entry.main() == 0
     assert captured["check"] is False
-    assert captured["stdin"] is agent_entry.sys.stdin
-    assert captured["stdout"] is agent_entry.sys.stdout
-    assert captured["stderr"] is agent_entry.sys.stderr
     child_env = captured["env"]
     if os.name == "nt":
         assert child_env["GROK_MANAGED_BY_NPM"] == "1"
-        assert captured["creationflags"] == subprocess.CREATE_NEW_CONSOLE
-    else:
-        assert captured["creationflags"] == 0
     startup_info = captured["startupinfo"]
     if os.name == "nt":
         assert isinstance(startup_info, subprocess.STARTUPINFO)
