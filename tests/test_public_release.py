@@ -155,6 +155,9 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
 
     assert agent_entry.main() == 0
     assert captured["check"] is False
+    assert captured["stdin"] is agent_entry.sys.stdin
+    assert captured["stdout"] is agent_entry.sys.stdout
+    assert captured["stderr"] is agent_entry.sys.stderr
     child_env = captured["env"]
     if os.name == "nt":
         assert child_env["GROK_MANAGED_BY_NPM"] == "1"

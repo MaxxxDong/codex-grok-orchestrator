@@ -84,6 +84,9 @@ def main() -> int:
             check=False,
             creationflags=_creation_flags(command),
             env=_child_environment(),
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
             startupinfo=hidden_startup_info(),
         )
     except (OSError, ValueError) as exc:
