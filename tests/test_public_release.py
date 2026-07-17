@@ -158,7 +158,7 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
     child_env = captured["env"]
     if os.name == "nt":
         assert child_env["GROK_MANAGED_BY_NPM"] == "1"
-        assert captured["creationflags"] == subprocess.CREATE_NO_WINDOW
+        assert captured["creationflags"] == subprocess.CREATE_NEW_CONSOLE
     else:
         assert captured["creationflags"] == 0
     startup_info = captured["startupinfo"]

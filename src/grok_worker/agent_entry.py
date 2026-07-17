@@ -63,7 +63,7 @@ def _child_environment() -> dict[str, str]:
 
 def _creation_flags(command: list[str]) -> int:
     if os.name == "nt" and Path(command[0]).suffix.lower() == ".exe":
-        return int(subprocess.CREATE_NO_WINDOW)
+        return int(subprocess.CREATE_NEW_CONSOLE)
     return 0
 
 
