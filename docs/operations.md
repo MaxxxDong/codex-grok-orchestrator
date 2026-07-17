@@ -16,6 +16,27 @@ worker state.
 Never treat the notification log as truth for GC, capacity, or success. Always
 re-read lifecycle (and artifacts when needed).
 
+## Native Windows runtime
+
+Windows 10/11 is supported by the Python package. Lifecycle, cache, and config
+transactions use shared/exclusive `LockFileEx` byte-range locks through the
+standard library; per-worker lock files live under the disposable root's hidden
+`.grok-worker-locks` directory so a verified clone can be removed after success.
+
+Install `grok-worker`, `grok-worker-agent`, `acpx`, and Grok Build on the native
+Windows `PATH`. The process launcher resolves `.exe` and `.cmd` entries before
+calling them with `shell=False`.
+
+The native runtime reads the user's normal Grok configuration directly from:
+
+```text
+%USERPROFILE%\.grok\config.toml
+```
+
+Do not maintain a second WSL Grok configuration for a native deployment. Keep
+backup files if required, but only the Windows path above is an active source of
+provider/model settings.
+
 ## 1. Completion-event notifications
 
 ### What it is

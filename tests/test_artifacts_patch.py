@@ -10,6 +10,7 @@ import pytest
 from grok_worker.clone import CloneError, create_workspace
 from grok_worker.patch_capture import PatchError, collect_git_patch
 from tests.conftest import init_git_repo
+from tests.path_helpers import symlink_or_skip
 
 
 def test_patch_covers_changes_and_exclusions(tmp_path: Path) -> None:
@@ -74,7 +75,7 @@ def test_nongit_reconstructable_patch(tmp_path: Path) -> None:
     src.mkdir()
     (src / "a.txt").write_text("base\n", encoding="utf-8")
     # preserve symlink as symlink
-    (src / "link").symlink_to("a.txt")
+    symlink_or_skip(src / "link", "a.txt")
     disp = tmp_path / "disp"
     disp.mkdir()
     clone, base, _fp = create_workspace(src, disp, "ng01")

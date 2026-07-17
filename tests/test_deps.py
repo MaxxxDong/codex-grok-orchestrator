@@ -16,6 +16,7 @@ from grok_worker.deps import (
     worker_env_exports,
 )
 from grok_worker.runner import RunConfig, run_worker
+from tests.path_helpers import symlink_or_skip
 
 
 def _write_pyproject(source: Path, lock_extra: str = "") -> None:
@@ -89,7 +90,7 @@ def test_fingerprint_stable_across_ephemeral_executable_symlinks(tmp_path: Path)
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.exists() or link.is_symlink():
             link.unlink()
-        link.symlink_to(real_py)
+        symlink_or_skip(link, real_py)
 
     assert link_a != link_b
     assert os.path.realpath(link_a) == os.path.realpath(link_b) == str(real_py)
@@ -110,7 +111,7 @@ def test_fingerprint_stable_across_ephemeral_executable_symlinks(tmp_path: Path)
     other_real.chmod(0o755)
     other_link = tmp_path / "builds-v0" / ".tmpCCCC" / "bin" / "python"
     other_link.parent.mkdir(parents=True, exist_ok=True)
-    other_link.symlink_to(other_real)
+    symlink_or_skip(other_link, other_real)
     with mock.patch("grok_worker.deps.sys.executable", str(other_link)):
         fp_other = compute_fingerprint(source)
     assert fp_other != fp_a

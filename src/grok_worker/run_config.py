@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
@@ -63,24 +64,55 @@ class RunOutcome:
 def default_agent_bin() -> str:
     here = Path(__file__).resolve()
     # src/grok_worker/run_config.py → parents[2] = package root with bin/
-    candidate = here.parents[2] / "bin" / "grok-acp-worker"
-    if candidate.is_file():
-        return str(candidate)
     installed = which("grok-worker-agent") or which("grok-acp-worker")
     if installed:
         return installed
+    candidate = (
+        here.parents[2]
+        / "bin"
+        / ("grok-acp-worker.cmd" if sys.platform == "win32" else "grok-acp-worker")
+    )
+    if candidate.is_file():
+        return str(candidate)
     raise FileNotFoundError(
         "cannot locate grok-worker-agent; install the package or pass --agent-bin"
     )
 
 
+def resolve_executable(command: str) -> str:
+    """Resolve PATHEXT launchers on Windows while preserving explicit paths."""
+    candidate = Path(command)
+    if candidate.is_file():
+        return str(candidate)
+    return which(command) or command
+
+
+def resolve_acpx_command(command: str) -> list[str]:
+    """Resolve acpx without a Windows batch hop that truncates multiline prompts."""
+    resolved = Path(resolve_executable(command))
+    if sys.platform == "win32" and resolved.suffix.lower() in {".cmd", ".bat"}:
+        entry = resolved.parent / "node_modules" / "acpx" / "dist" / "cli.js"
+        node = which("node")
+        if entry.is_file() and node:
+            return [node, str(entry)]
+    return [str(resolved)]
+
+
+def normalize_agent_command(command: str) -> str:
+    """Protect native Windows paths from acpx's shell-style backslash parser."""
+    candidate = Path(command)
+    if sys.platform == "win32" and candidate.is_file():
+        return candidate.as_posix()
+    return command
+
+
 def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list[str]:
     cmd = [
-        cfg.acpx_bin,
+        *resolve_acpx_command(cfg.acpx_bin),
         "--cwd",
         str(clone),
         "--agent",
-        agent,
+        normalize_agent_command(agent),
         "--auth-policy",
         "skip",
     ]

@@ -41,7 +41,7 @@ def test_installed_launcher_arbitrary_cwd(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["GROK_WORKER_SKILL_ROOT"] = str(CANDIDATE)
     env["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
-    launcher = CANDIDATE / "bin" / "grok-worker"
+    launcher = CANDIDATE / "bin" / ("grok-worker.cmd" if os.name == "nt" else "grok-worker")
     proc = subprocess.run(
         [str(launcher), "status", "--disposable-root", str(tmp_path / "d")],
         cwd="/",

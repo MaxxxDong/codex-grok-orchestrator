@@ -13,6 +13,8 @@ Always enter through `grok-worker`. Do not invoke the ACP adapter directly: it i
 
 The source repository remains canonical. Workers operate in disposable clones and must never write clone paths into maintained project files. The dispatcher reviews artifacts and decides what, if anything, is integrated.
 
+On native Windows, use the installed `grok-worker.exe` entry. It runs the same Python lifecycle implementation with Windows process locks and reads `%USERPROFILE%\.grok\config.toml` as the single active Grok configuration; do not route through WSL or maintain a second provider config.
+
 ## Choose a run mode
 
 - Use `run` for one bounded task that fits one prompt.

@@ -17,7 +17,11 @@ from grok_worker.deps import prepare_shared_env
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
-from grok_worker.run_config import default_agent_bin
+from grok_worker.run_config import (
+    default_agent_bin,
+    normalize_agent_command,
+    resolve_acpx_command,
+)
 from grok_worker.session_commands import build_ensure_cmd, build_prompt_cmd
 from grok_worker.session_state import SessionState, permission_signature, session_state_path
 from grok_worker.settings import (
@@ -77,11 +81,11 @@ def permission_contract_signature(cfg: SessionConfig) -> str:
 
 def common_command(cfg: SessionConfig, clone: Path) -> list[str]:
     command = [
-        cfg.acpx_bin,
+        *resolve_acpx_command(cfg.acpx_bin),
         "--cwd",
         str(clone),
         "--agent",
-        cfg.agent_bin or default_agent_bin(),
+        normalize_agent_command(cfg.agent_bin or default_agent_bin()),
         "--auth-policy",
         "skip",
     ]

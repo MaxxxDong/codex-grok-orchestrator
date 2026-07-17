@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import stat
+import sys
 import textwrap
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from pathlib import Path
 def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
     """Install a fake `acpx` that simulates worker outcomes without network."""
     bin_dir.mkdir(parents=True, exist_ok=True)
-    path = bin_dir / "acpx"
+    script_path = bin_dir / ("fake_acpx.py" if os.name == "nt" else "acpx")
     script = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
@@ -208,6 +210,13 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
         sys.exit(2)
         """
     )
-    path.write_text(script, encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    return path
+    script_path.write_text(script, encoding="utf-8")
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if os.name != "nt":
+        return script_path
+    launcher = bin_dir / "acpx.cmd"
+    launcher.write_text(
+        f'@"{sys.executable}" "{script_path}" %*\n',
+        encoding="utf-8",
+    )
+    return launcher

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from grok_worker.temp_cleanup import clean_stale_tmp
+from tests.path_helpers import symlink_or_skip
 
 
 def test_temp_cleanup_old_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,7 +36,7 @@ def test_temp_cleanup_skips_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     real.mkdir()
     (real / "s").write_text("s", encoding="utf-8")
     link = tmp / "grok-link"
-    link.symlink_to(real)
+    symlink_or_skip(link, real, target_is_directory=True)
     os.utime(real, (1, 1), follow_symlinks=False)
     removed = clean_stale_tmp(age_hours=0.0, now=time.time())
     assert not any("grok-link" in r for r in removed)
