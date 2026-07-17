@@ -36,20 +36,26 @@ def build_command() -> list[str]:
     return command
 
 
+def _creation_flags() -> int:
+    """Keep the Windows .cmd launcher attached but visually silent."""
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def main() -> int:
     if not os.environ.get("GROK_WORKER_LIFECYCLE") and not env_flag(
         "GROK_WORKER_ALLOW_DIRECT_AGENT", default=False
     ):
         print(
-            "grok-worker-agent: refusing direct invocation without "
-            "GROK_WORKER_LIFECYCLE=1",
+            "grok-worker-agent: refusing direct invocation without GROK_WORKER_LIFECYCLE=1",
             file=sys.stderr,
         )
         return 2
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        completed = subprocess.run(command, check=False)
+        completed = subprocess.run(command, check=False, creationflags=_creation_flags())
     except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127

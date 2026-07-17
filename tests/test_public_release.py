@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import tomllib
 from html.parser import HTMLParser
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,6 +125,26 @@ def test_agent_defaults_to_safe_no_subagents(monkeypatch) -> None:  # type: igno
     assert "--no-subagents" in command
     assert command[command.index("--model") + 1]
     assert command[command.index("--reasoning-effort") + 1]
+
+
+def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import grok_worker.agent_entry as agent_entry
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("GROK_WORKER_LIFECYCLE", "1")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
+    monkeypatch.setattr(agent_entry.subprocess, "run", fake_run)
+
+    assert agent_entry.main() == 0
+    expected = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    assert captured["creationflags"] == expected
+    assert captured["check"] is False
 
 
 def test_packaged_prompts_load_without_repository_assets() -> None:
@@ -251,8 +273,8 @@ def test_docs_landing_page_is_static_bilingual_and_self_contained() -> None:
     assert parser.external_scripts == 0
     assert parser.external_stylesheets == 0
     assert "github.com/MaxxxDong/codex-grok-orchestrator" in text
-    assert "data-lang-block=\"zh\"" in text
-    assert "data-lang-block=\"en\"" in text
+    assert 'data-lang-block="zh"' in text
+    assert 'data-lang-block="en"' in text
     assert "localStorage" in text
     assert "replaceState" in text
     assert "prefers-reduced-motion" in text

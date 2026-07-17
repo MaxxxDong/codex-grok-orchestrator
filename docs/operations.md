@@ -45,6 +45,11 @@ Clone admission is protected by a short root lock, while worker execution and
 fingerprint-distinct dependency work remain concurrent. Same-fingerprint uv
 preparation is serialized once and then reused by all admitted workers.
 
+On Windows, the Grok agent launcher uses `CREATE_NO_WINDOW` when invoking the
+configured executable. This keeps `.cmd`-based Grok installations silent while
+preserving the same foreground lifecycle, cancellation, timeout, and process-tree
+cleanup behavior.
+
 ## 1. Completion-event notifications
 
 ### What it is
