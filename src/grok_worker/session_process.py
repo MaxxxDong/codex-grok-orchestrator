@@ -143,7 +143,7 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
         if cfg.prepare_deps:
             dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
         effective_prompt = prompt
-        if ensure and dep_env:
+        if ensure:
             effective_prompt += "\n" + worker_env_exports(dep_env)
         prompt_file.write_text(effective_prompt, encoding="utf-8")
         env.update(dep_env)

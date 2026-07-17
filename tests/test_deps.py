@@ -246,6 +246,15 @@ def test_worker_env_exports_require_no_sync() -> None:
     assert "uv run --no-sync" in text
 
 
+def test_worker_env_exports_forbid_uv_when_project_environment_is_absent() -> None:
+    text = worker_env_exports({"UV_CACHE_DIR": "/c"})
+
+    assert "Dependency preparation is disabled" in text
+    assert "Do not run uv, uv run, uv sync, pip" in text
+    assert "Always use: uv run --no-sync" not in text
+    assert "UV_PROJECT_ENVIRONMENT" not in text
+
+
 def test_concurrent_preparation_serialized(tmp_path: Path) -> None:
     """Same-fingerprint concurrent prepares: lock serializes; sync exactly once."""
     import threading

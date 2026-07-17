@@ -87,6 +87,10 @@ The public core does not hard-lock one model or provider setup. Configure it wit
 
 Subagents are disabled by default. Enable them explicitly with `--allow-subagents` only when nested delegation is intentional.
 
+`--no-prepare-deps` is a strict no-environment-creation mode: the worker must not
+run `uv`, `uv run`, `uv sync`, or `pip`. Use it only when the task can rely on
+pre-existing system tools or an explicitly supplied absolute interpreter path.
+
 ## Safety invariants
 
 - Lifecycle metadata is authoritative; notification events are advisory.

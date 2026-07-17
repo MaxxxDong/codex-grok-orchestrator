@@ -190,13 +190,21 @@ def prepare_shared_env(
 
 
 def worker_env_exports(env_vars: dict[str, str]) -> str:
-    """Prompt contract requiring uv run --no-sync."""
-    lines = [
-        "# Shared dependency contract (MANDATORY):",
-        "#   Always use: uv run --no-sync <command>",
-        "#   Never: uv sync / pip install inside the clone",
-        "#   Never create clone-local .venv",
-    ]
+    """Return a dependency contract that cannot create a clone-local environment."""
+    if "UV_PROJECT_ENVIRONMENT" in env_vars:
+        lines = [
+            "# Shared dependency contract (MANDATORY):",
+            "#   Always use: uv run --no-sync <command>",
+            "#   Never: uv sync / pip install inside the clone",
+            "#   Never create clone-local .venv",
+        ]
+    else:
+        lines = [
+            "# Dependency preparation is disabled (MANDATORY):",
+            "#   Do not run uv, uv run, uv sync, pip, or any environment creator",
+            "#   Use only pre-existing system tools or an explicitly supplied absolute interpreter",
+            "#   Never create clone-local .venv",
+        ]
     for key in (
         "UV_CACHE_DIR",
         "UV_PROJECT_ENVIRONMENT",

@@ -50,6 +50,12 @@ configured executable. This keeps `.cmd`-based Grok installations silent while
 preserving the same foreground lifecycle, cancellation, timeout, and process-tree
 cleanup behavior.
 
+`--no-prepare-deps` disables environment creation completely. Its injected
+contract forbids `uv`, `uv run`, `uv sync`, and `pip`, because even
+`uv run --no-sync` creates a clone-local `.venv` when
+`UV_PROJECT_ENVIRONMENT` is absent. Tasks using this option must rely on
+pre-existing system tools or an explicitly supplied absolute interpreter.
+
 ## 1. Completion-event notifications
 
 ### What it is

@@ -136,6 +136,38 @@ def test_named_session_config_rejects_non_positive_worker_limit(tmp_path: Path) 
         )
 
 
+def test_named_session_without_dependency_preparation_forbids_uv(
+    tmp_path: Path, path_with_fake_acpx: Path
+) -> None:
+    from grok_worker.session_process import SessionConfig
+    from grok_worker.session_runtime import start_session
+
+    source = tmp_path / "source"
+    init_git_repo(source)
+    manifest = tmp_path / "task.json"
+    _write_manifest(manifest, "use existing tools only")
+    cfg = SessionConfig(
+        source=source,
+        manifest_file=manifest,
+        role="implement",
+        mode="implementation",
+        disposable_root=tmp_path / "disposable",
+        artifact_root=tmp_path / "artifacts",
+        shared_cache_root=tmp_path / "cache",
+        acpx_bin=str(path_with_fake_acpx),
+        prepare_deps=False,
+    )
+
+    started = start_session(cfg)
+    prompt = (Path(started.clone_path or "") / ".grok-worker" / "prompt-001.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Dependency preparation is disabled" in prompt
+    assert "Do not run uv, uv run, uv sync, pip" in prompt
+    assert "Always use: uv run --no-sync" not in prompt
+
+
 def test_session_state_read_rejects_unknown_fields(tmp_path: Path) -> None:
     from grok_worker.session_state import SessionContractError, SessionState
 
