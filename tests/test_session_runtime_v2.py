@@ -3,12 +3,38 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from tests.conftest import init_git_repo
+
+
+def test_named_session_acpx_launch_is_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from grok_worker import session_process
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        captured["command"] = command
+        captured.update(kwargs)
+        return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(session_process.subprocess, "run", fake_run)
+
+    assert session_process.invoke(["acpx", "prompt"], tmp_path / "agent.log", {}) == 0
+    startup_info = captured["startupinfo"]
+    if os.name == "nt":
+        assert isinstance(startup_info, subprocess.STARTUPINFO)
+        assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert startup_info.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert startup_info is None
 
 
 def _write_manifest(path: Path, outcome: str) -> None:

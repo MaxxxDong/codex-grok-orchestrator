@@ -228,6 +228,7 @@ def test_execute_worker_passes_injected_one_shot_prompt_to_acp(
     def fake_popen(cmd: list[str], *args: Any, **kwargs: Any) -> MagicMock:
         assert cmd[-2] == "exec"
         captured["prompt"] = cmd[-1]
+        captured["popen_kwargs"] = kwargs
         proc = MagicMock()
         proc.pid = 4242
         proc.poll.return_value = 0
@@ -302,3 +303,12 @@ def test_execute_worker_passes_injected_one_shot_prompt_to_acp(
     prompt = captured["prompt"]
     _assert_base_and_task(prompt, TASK_IMPL)
     _assert_implementation_contract(prompt)
+    startup_info = captured["popen_kwargs"]["startupinfo"]
+    if __import__("os").name == "nt":
+        import subprocess
+
+        assert isinstance(startup_info, subprocess.STARTUPINFO)
+        assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert startup_info.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert startup_info is None

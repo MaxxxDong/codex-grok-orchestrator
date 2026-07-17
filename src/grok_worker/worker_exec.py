@@ -21,6 +21,7 @@ from grok_worker.process_identity import (
     process_start_token,
     windows_descendant_pids,
 )
+from grok_worker.process_launch import hidden_startup_info
 from grok_worker.prompt_cache import OneShotModeError, build_one_shot_prompt
 from grok_worker.run_config import RunConfig, RunOutcome, build_acpx_cmd
 from grok_worker.settings import agent_policy_environment
@@ -173,7 +174,13 @@ def execute_worker(
         cmd = build_acpx_cmd(cfg, clone, agent, prompt)
 
         with agent_log.open("wb") as logfh:
-            child_proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT, env=env)
+            child_proc = subprocess.Popen(
+                cmd,
+                stdout=logfh,
+                stderr=subprocess.STDOUT,
+                env=env,
+                startupinfo=hidden_startup_info(),
+            )
             meta.acpx_pid = child_proc.pid
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))

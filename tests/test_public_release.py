@@ -127,6 +127,18 @@ def test_agent_defaults_to_safe_no_subagents(monkeypatch) -> None:  # type: igno
     assert command[command.index("--reasoning-effort") + 1]
 
 
+def test_windows_agent_prefers_canonical_native_grok_binary(tmp_path: Path) -> None:
+    from grok_worker.agent_entry import resolve_grok_bin
+
+    native = tmp_path / ".grok" / "bin" / "grok.exe"
+    native.parent.mkdir(parents=True)
+    native.touch()
+
+    resolved = resolve_grok_bin(platform="nt", home=tmp_path, path_lookup=lambda _name: "grok.CMD")
+
+    assert resolved == str(native)
+
+
 def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import grok_worker.agent_entry as agent_entry
 

@@ -17,6 +17,7 @@ from grok_worker.deps import prepare_shared_env, worker_env_exports
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
+from grok_worker.process_launch import hidden_startup_info
 from grok_worker.run_config import (
     default_agent_bin,
     normalize_agent_command,
@@ -116,7 +117,13 @@ def common_command(cfg: SessionConfig, clone: Path) -> list[str]:
 
 def invoke(command: list[str], log: Path, env: dict[str, str]) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(command, capture_output=True, env=env, check=False)
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        env=env,
+        check=False,
+        startupinfo=hidden_startup_info(),
+    )
     with log.open("ab") as stream:
         stream.write(result.stdout)
         stream.write(result.stderr)

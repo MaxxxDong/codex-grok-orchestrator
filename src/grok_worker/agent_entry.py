@@ -7,14 +7,31 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
+from grok_worker.process_launch import hidden_startup_info
 from grok_worker.settings import default_model, default_reasoning_effort, env_flag, env_text
+
+
+def resolve_grok_bin(
+    *,
+    platform: str | None = None,
+    home: Path | None = None,
+    path_lookup: Callable[[str], str | None] = shutil.which,
+) -> str:
+    """Prefer xAI's canonical native binary over the Windows npm batch trampoline."""
+    effective_platform = platform or os.name
+    if effective_platform == "nt":
+        native = (home or Path.home()) / ".grok" / "bin" / "grok.exe"
+        if native.is_file():
+            return str(native)
+    return path_lookup("grok") or "grok"
 
 
 def build_command() -> list[str]:
     configured = os.environ.get("GROK_WORKER_GROK_BIN")
-    grok_bin = configured.strip() if configured else (shutil.which("grok") or "grok")
+    grok_bin = configured.strip() if configured else resolve_grok_bin()
     if not grok_bin:
         raise ValueError("GROK_WORKER_GROK_BIN must not be empty")
     command = [
@@ -36,16 +53,6 @@ def build_command() -> list[str]:
     return command
 
 
-def _startup_info() -> subprocess.STARTUPINFO | None:
-    """Hide the Windows .cmd window without detaching its ACP stdio pipes."""
-    if os.name != "nt":
-        return None
-    startup_info = subprocess.STARTUPINFO()
-    startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startup_info.wShowWindow = subprocess.SW_HIDE
-    return startup_info
-
-
 def main() -> int:
     if not os.environ.get("GROK_WORKER_LIFECYCLE") and not env_flag(
         "GROK_WORKER_ALLOW_DIRECT_AGENT", default=False
@@ -58,7 +65,7 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        completed = subprocess.run(command, check=False, startupinfo=_startup_info())
+        completed = subprocess.run(command, check=False, startupinfo=hidden_startup_info())
     except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
