@@ -53,6 +53,14 @@ def build_command() -> list[str]:
     return command
 
 
+def _child_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    if os.name == "nt":
+        # The official npm trampoline sets this before starting grok.exe.
+        env["GROK_MANAGED_BY_NPM"] = "1"
+    return env
+
+
 def main() -> int:
     if not os.environ.get("GROK_WORKER_LIFECYCLE") and not env_flag(
         "GROK_WORKER_ALLOW_DIRECT_AGENT", default=False
@@ -65,7 +73,12 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        completed = subprocess.run(command, check=False, startupinfo=hidden_startup_info())
+        completed = subprocess.run(
+            command,
+            check=False,
+            env=_child_environment(),
+            startupinfo=hidden_startup_info(),
+        )
     except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
