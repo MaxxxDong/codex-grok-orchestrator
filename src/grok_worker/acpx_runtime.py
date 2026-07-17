@@ -22,8 +22,8 @@ ACPX_VERSION = "0.12.0"
 UPSTREAM_JAVASCRIPT_SHA256 = (
     "d92153086f058880623af7297a6867166068e27f9b2cc97a7b94c6a80e2b20da"
 )
-PATCH_LEVEL = "gw-win-1"
-PATCH_MARKER = "/* grok-worker managed Windows runtime: gw-win-1 */"
+PATCH_LEVEL = "gw-win-2"
+PATCH_MARKER = "/* grok-worker managed Windows runtime: gw-win-2 */"
 
 
 class AcpxRuntimeError(RuntimeError):
@@ -68,7 +68,12 @@ def patch_acpx_javascript(text: str) -> str:
         '''function buildTerminalSpawnCommand(command, args, platform = process.platform) {
 \tconst normalizedArgs = [...args ?? []];
 \tconst usePwsh = platform === "win32" && /(?:^|[\\\\/])powershell(?:\\.exe)?$/iu.test(command);
+\tconst useCmd = platform === "win32" && /(?:^|[\\\\/])cmd(?:\\.exe)?$/iu.test(command);
 \tconst normalizedCommand = usePwsh ? "pwsh.exe" : command;
+\tif (useCmd && !normalizedArgs.some((arg) => /^\\/u$/iu.test(arg))) {
+\t\tconst insertAt = normalizedArgs.findIndex((arg) => /^\\/d$/iu.test(arg)) + 1;
+\t\tnormalizedArgs.splice(Math.max(0, insertAt), 0, "/u");
+\t}
 \tif (usePwsh || platform === "win32" && /(?:^|[\\\\/])pwsh(?:\\.exe)?$/iu.test(command)) {
 \t\tconst utf8Prefix = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);";
 \t\tconst commandIndex = normalizedArgs.findIndex((arg) => /^-(?:command|c)$/iu.test(arg));
@@ -87,7 +92,8 @@ def patch_acpx_javascript(text: str) -> str:
 \t\tcommand: normalizedCommand,
 \t\targs: normalizedArgs,
 \t\tkillProcessGroup: false,
-\t\tcleanupScope: platform === "win32" ? "windows-tree" : "process"
+\t\tcleanupScope: platform === "win32" ? "windows-tree" : "process",
+\t\toutputEncoding: useCmd ? "utf-16le" : void 0
 \t};
 }''',
         "direct spawn",
@@ -115,12 +121,14 @@ def patch_acpx_javascript(text: str) -> str:
 \t\tcommand: "cmd.exe",
 \t\targs: [
 \t\t\t"/d",
+\t\t\t"/u",
 \t\t\t"/s",
 \t\t\t"/c",
-\t\t\t`chcp 65001>nul & ${normalizedCommand}`
+\t\t\tnormalizedCommand
 \t\t],
 \t\tkillProcessGroup: false,
 \t\tcleanupScope: "windows-tree",
+\t\toutputEncoding: "utf-16le",
 \t\twindowsVerbatimArguments: true
 \t};
 \t}
@@ -148,6 +156,35 @@ def patch_acpx_javascript(text: str) -> str:
         "\t\t\t\tkillProcessGroup: spawnCommand.killProcessGroup,\n"
         "\t\t\t\tcleanupScope: spawnCommand.cleanupScope,\n\t\t\t\tdescendantPids:",
         "terminal cleanup scope",
+    )
+    text = _replace_once(
+        text,
+        '''\t\t\tconst appendOutput = (chunk) => {
+\t\t\t\tconst bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+\t\t\t\tif (bytes.length === 0) return;
+\t\t\t\tterminal.output = Buffer.concat([terminal.output, bytes]);
+\t\t\t\tif (terminal.output.length > terminal.outputByteLimit) {
+\t\t\t\t\tterminal.output = trimToUtf8Boundary(terminal.output, terminal.outputByteLimit);
+\t\t\t\t\tterminal.truncated = true;
+\t\t\t\t}
+\t\t\t};
+\t\t\tproc.stdout.on("data", appendOutput);
+\t\t\tproc.stderr.on("data", appendOutput);''',
+        '''\t\t\tconst stdoutDecoder = spawnCommand.outputEncoding ? new TextDecoder(spawnCommand.outputEncoding) : void 0;
+\t\t\tconst stderrDecoder = spawnCommand.outputEncoding ? new TextDecoder(spawnCommand.outputEncoding) : void 0;
+\t\t\tconst appendOutput = (chunk, decoder) => {
+\t\t\t\tconst rawBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+\t\t\t\tconst bytes = decoder ? Buffer.from(decoder.decode(rawBytes, { stream: true }), "utf8") : rawBytes;
+\t\t\t\tif (bytes.length === 0) return;
+\t\t\t\tterminal.output = Buffer.concat([terminal.output, bytes]);
+\t\t\t\tif (terminal.output.length > terminal.outputByteLimit) {
+\t\t\t\t\tterminal.output = trimToUtf8Boundary(terminal.output, terminal.outputByteLimit);
+\t\t\t\t\tterminal.truncated = true;
+\t\t\t\t}
+\t\t\t};
+\t\t\tproc.stdout.on("data", (chunk) => appendOutput(chunk, stdoutDecoder));
+\t\t\tproc.stderr.on("data", (chunk) => appendOutput(chunk, stderrDecoder));''',
+        "terminal output decoding",
     )
 
     old_signal = '''\tasync signalProcess(terminal, signal) {

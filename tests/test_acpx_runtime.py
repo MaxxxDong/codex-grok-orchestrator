@@ -52,6 +52,17 @@ function trimToUtf8Boundary(buffer, limit) {
 \t\t\t\tkillProcessGroup: spawnCommand.killProcessGroup,
 \t\t\t\tdescendantPids: /* @__PURE__ */ new Set(),
 \t\t\t};
+\t\t\tconst appendOutput = (chunk) => {
+\t\t\t\tconst bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+\t\t\t\tif (bytes.length === 0) return;
+\t\t\t\tterminal.output = Buffer.concat([terminal.output, bytes]);
+\t\t\t\tif (terminal.output.length > terminal.outputByteLimit) {
+\t\t\t\t\tterminal.output = trimToUtf8Boundary(terminal.output, terminal.outputByteLimit);
+\t\t\t\t\tterminal.truncated = true;
+\t\t\t\t}
+\t\t\t};
+\t\t\tproc.stdout.on("data", appendOutput);
+\t\t\tproc.stderr.on("data", appendOutput);
 \tasync signalProcess(terminal, signal) {
 \t\tconst pid = terminal.process.pid;
 \t\tif (terminal.killProcessGroup && pid && process.platform === "win32") {
@@ -131,11 +142,17 @@ def test_patch_enables_utf8_and_windows_verbatim_shell_arguments() -> None:
     patched = patch_acpx_javascript(UPSTREAM_FIXTURE)
 
     assert "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);" in patched
-    assert "chcp 65001>nul & ${normalizedCommand}" in patched
+    assert '"/u"' in patched
+    assert 'outputEncoding: "utf-16le"' in patched
+    assert "new TextDecoder(spawnCommand.outputEncoding)" in patched
+    assert 'appendOutput(chunk, stdoutDecoder)' in patched
+    assert 'appendOutput(chunk, stderrDecoder)' in patched
     assert "windowsVerbatimArguments: true" in patched
     assert "spawnOptions.windowsVerbatimArguments = true" in patched
     assert "if (start >= buffer.length) return Buffer.alloc(0);" in patched
     assert 'const normalizedCommand = usePwsh ? "pwsh.exe" : command' in patched
+    assert "const useCmd" in patched
+    assert 'normalizedArgs.splice(Math.max(0, insertAt), 0, "/u")' in patched
     assert 'const child = spawn("pwsh.exe"' in patched
     assert '"-CommandWithArgs", invokeFile' in patched
     assert 'command.replace(/^\\s*powershell' in patched
