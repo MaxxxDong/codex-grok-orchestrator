@@ -45,10 +45,10 @@ Clone admission is protected by a short root lock, while worker execution and
 fingerprint-distinct dependency work remain concurrent. Same-fingerprint uv
 preparation is serialized once and then reused by all admitted workers.
 
-On Windows, the Grok agent launcher uses `CREATE_NO_WINDOW` when invoking the
-configured executable. This keeps `.cmd`-based Grok installations silent while
-preserving the same foreground lifecycle, cancellation, timeout, and process-tree
-cleanup behavior.
+On Windows, the Grok agent launcher uses hidden `STARTUPINFO` window state when
+invoking the configured executable. This keeps `.cmd`-based Grok installations
+silent without detaching the ACP stdin/stdout pipes, preserving the same
+foreground lifecycle, cancellation, timeout, and process-tree cleanup behavior.
 
 `--no-prepare-deps` disables environment creation completely. Its injected
 contract forbids `uv`, `uv run`, `uv sync`, and `pip`, because even

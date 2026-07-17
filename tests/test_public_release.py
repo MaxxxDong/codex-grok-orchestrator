@@ -142,9 +142,14 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
     monkeypatch.setattr(agent_entry.subprocess, "run", fake_run)
 
     assert agent_entry.main() == 0
-    expected = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
-    assert captured["creationflags"] == expected
     assert captured["check"] is False
+    startup_info = captured["startupinfo"]
+    if os.name == "nt":
+        assert isinstance(startup_info, subprocess.STARTUPINFO)
+        assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert startup_info.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert startup_info is None
 
 
 def test_packaged_prompts_load_without_repository_assets() -> None:

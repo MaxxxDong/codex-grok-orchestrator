@@ -36,11 +36,14 @@ def build_command() -> list[str]:
     return command
 
 
-def _creation_flags() -> int:
-    """Keep the Windows .cmd launcher attached but visually silent."""
+def _startup_info() -> subprocess.STARTUPINFO | None:
+    """Hide the Windows .cmd window without detaching its ACP stdio pipes."""
     if os.name != "nt":
-        return 0
-    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return None
+    startup_info = subprocess.STARTUPINFO()
+    startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup_info.wShowWindow = subprocess.SW_HIDE
+    return startup_info
 
 
 def main() -> int:
@@ -55,7 +58,7 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        completed = subprocess.run(command, check=False, creationflags=_creation_flags())
+        completed = subprocess.run(command, check=False, startupinfo=_startup_info())
     except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
