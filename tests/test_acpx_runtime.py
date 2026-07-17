@@ -63,6 +63,8 @@ function trimToUtf8Boundary(buffer, limit) {
 \t\t\t};
 \t\t\tproc.stdout.on("data", appendOutput);
 \t\t\tproc.stderr.on("data", appendOutput);
+\t\t\tproc.once("exit", (exitCode, signal) => {
+\t\t\t\tterminal.exitCode = exitCode;
 \tasync signalProcess(terminal, signal) {
 \t\tconst pid = terminal.process.pid;
 \t\tif (terminal.killProcessGroup && pid && process.platform === "win32") {
@@ -142,17 +144,24 @@ def test_patch_enables_utf8_and_windows_verbatim_shell_arguments() -> None:
     patched = patch_acpx_javascript(UPSTREAM_FIXTURE)
 
     assert "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);" in patched
-    assert '"/u"' in patched
-    assert 'outputEncoding: "utf-16le"' in patched
-    assert "new TextDecoder(spawnCommand.outputEncoding)" in patched
+    assert 'const WINDOWS_CMD_OUTPUT_ENCODING = "gbk"' in patched
+    assert "outputEncoding: WINDOWS_CMD_OUTPUT_ENCODING" in patched
+    assert "createAdaptiveOutputDecoder(spawnCommand.outputEncoding)" in patched
+    assert 'new TextDecoder("utf-8")' in patched
+    assert 'new TextDecoder("utf-8", { fatal: true })' in patched
+    assert "new TextDecoder(fallbackEncoding)" in patched
+    assert 'mode = isUtf8(pending) ? "utf8" : "fallback"' in patched
+    assert "if (!pending.includes(10)) return Buffer.alloc(0);" in patched
     assert 'appendOutput(chunk, stdoutDecoder)' in patched
     assert 'appendOutput(chunk, stderrDecoder)' in patched
+    assert "appendBytes(stdoutDecoder.flush())" in patched
+    assert "appendBytes(stderrDecoder.flush())" in patched
     assert "windowsVerbatimArguments: true" in patched
     assert "spawnOptions.windowsVerbatimArguments = true" in patched
     assert "if (start >= buffer.length) return Buffer.alloc(0);" in patched
     assert 'const normalizedCommand = usePwsh ? "pwsh.exe" : command' in patched
     assert "const useCmd" in patched
-    assert 'normalizedArgs.splice(Math.max(0, insertAt), 0, "/u")' in patched
+    assert "windowsVerbatimArguments: useCmd" in patched
     assert 'const child = spawn("pwsh.exe"' in patched
     assert '"-CommandWithArgs", invokeFile' in patched
     assert 'command.replace(/^\\s*powershell' in patched

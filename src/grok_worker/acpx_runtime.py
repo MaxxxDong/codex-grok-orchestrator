@@ -22,8 +22,8 @@ ACPX_VERSION = "0.12.0"
 UPSTREAM_JAVASCRIPT_SHA256 = (
     "d92153086f058880623af7297a6867166068e27f9b2cc97a7b94c6a80e2b20da"
 )
-PATCH_LEVEL = "gw-win-2"
-PATCH_MARKER = "/* grok-worker managed Windows runtime: gw-win-2 */"
+PATCH_LEVEL = "gw-win-4"
+PATCH_MARKER = "/* grok-worker managed Windows runtime: gw-win-4 */"
 
 
 class AcpxRuntimeError(RuntimeError):
@@ -40,6 +40,8 @@ class RuntimeReceipt:
     entry_sha256: str
     powershell_path: str
     powershell_version: str
+    windows_cmd_code_page: int
+    windows_cmd_encoding: str
 
 
 def _replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -51,7 +53,7 @@ def _replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def patch_acpx_javascript(text: str) -> str:
+def patch_acpx_javascript(text: str, *, windows_cmd_encoding: str = "gbk") -> str:
     """Apply the audited Windows terminal fixes to acpx 0.12.0 JavaScript."""
     if PATCH_MARKER in text:
         return text
@@ -70,10 +72,6 @@ def patch_acpx_javascript(text: str) -> str:
 \tconst usePwsh = platform === "win32" && /(?:^|[\\\\/])powershell(?:\\.exe)?$/iu.test(command);
 \tconst useCmd = platform === "win32" && /(?:^|[\\\\/])cmd(?:\\.exe)?$/iu.test(command);
 \tconst normalizedCommand = usePwsh ? "pwsh.exe" : command;
-\tif (useCmd && !normalizedArgs.some((arg) => /^\\/u$/iu.test(arg))) {
-\t\tconst insertAt = normalizedArgs.findIndex((arg) => /^\\/d$/iu.test(arg)) + 1;
-\t\tnormalizedArgs.splice(Math.max(0, insertAt), 0, "/u");
-\t}
 \tif (usePwsh || platform === "win32" && /(?:^|[\\\\/])pwsh(?:\\.exe)?$/iu.test(command)) {
 \t\tconst utf8Prefix = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);";
 \t\tconst commandIndex = normalizedArgs.findIndex((arg) => /^-(?:command|c)$/iu.test(arg));
@@ -93,7 +91,8 @@ def patch_acpx_javascript(text: str) -> str:
 \t\targs: normalizedArgs,
 \t\tkillProcessGroup: false,
 \t\tcleanupScope: platform === "win32" ? "windows-tree" : "process",
-\t\toutputEncoding: useCmd ? "utf-16le" : void 0
+\t\toutputEncoding: useCmd ? WINDOWS_CMD_OUTPUT_ENCODING : void 0,
+\t\twindowsVerbatimArguments: useCmd
 \t};
 }''',
         "direct spawn",
@@ -121,14 +120,13 @@ def patch_acpx_javascript(text: str) -> str:
 \t\tcommand: "cmd.exe",
 \t\targs: [
 \t\t\t"/d",
-\t\t\t"/u",
 \t\t\t"/s",
 \t\t\t"/c",
 \t\t\tnormalizedCommand
 \t\t],
 \t\tkillProcessGroup: false,
 \t\tcleanupScope: "windows-tree",
-\t\toutputEncoding: "utf-16le",
+\t\toutputEncoding: WINDOWS_CMD_OUTPUT_ENCODING,
 \t\twindowsVerbatimArguments: true
 \t};
 \t}
@@ -170,11 +168,9 @@ def patch_acpx_javascript(text: str) -> str:
 \t\t\t};
 \t\t\tproc.stdout.on("data", appendOutput);
 \t\t\tproc.stderr.on("data", appendOutput);''',
-        '''\t\t\tconst stdoutDecoder = spawnCommand.outputEncoding ? new TextDecoder(spawnCommand.outputEncoding) : void 0;
-\t\t\tconst stderrDecoder = spawnCommand.outputEncoding ? new TextDecoder(spawnCommand.outputEncoding) : void 0;
-\t\t\tconst appendOutput = (chunk, decoder) => {
-\t\t\t\tconst rawBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-\t\t\t\tconst bytes = decoder ? Buffer.from(decoder.decode(rawBytes, { stream: true }), "utf8") : rawBytes;
+        '''\t\t\tconst stdoutDecoder = spawnCommand.outputEncoding ? createAdaptiveOutputDecoder(spawnCommand.outputEncoding) : void 0;
+\t\t\tconst stderrDecoder = spawnCommand.outputEncoding ? createAdaptiveOutputDecoder(spawnCommand.outputEncoding) : void 0;
+\t\t\tconst appendBytes = (bytes) => {
 \t\t\t\tif (bytes.length === 0) return;
 \t\t\t\tterminal.output = Buffer.concat([terminal.output, bytes]);
 \t\t\t\tif (terminal.output.length > terminal.outputByteLimit) {
@@ -182,9 +178,23 @@ def patch_acpx_javascript(text: str) -> str:
 \t\t\t\t\tterminal.truncated = true;
 \t\t\t\t}
 \t\t\t};
+\t\t\tconst appendOutput = (chunk, decoder) => {
+\t\t\t\tconst rawBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+\t\t\t\tappendBytes(decoder ? decoder.decode(rawBytes) : rawBytes);
+\t\t\t};
 \t\t\tproc.stdout.on("data", (chunk) => appendOutput(chunk, stdoutDecoder));
 \t\t\tproc.stderr.on("data", (chunk) => appendOutput(chunk, stderrDecoder));''',
         "terminal output decoding",
+    )
+    text = _replace_once(
+        text,
+        '''\t\t\tproc.once("exit", (exitCode, signal) => {
+\t\t\t\tterminal.exitCode = exitCode;''',
+        '''\t\t\tproc.once("exit", (exitCode, signal) => {
+\t\t\t\tif (stdoutDecoder) appendBytes(stdoutDecoder.flush());
+\t\t\t\tif (stderrDecoder) appendBytes(stderrDecoder.flush());
+\t\t\t\tterminal.exitCode = exitCode;''',
+        "terminal output decoder flush",
     )
 
     old_signal = '''\tasync signalProcess(terminal, signal) {
@@ -329,7 +339,48 @@ async function runProcessListCommand() {
         'if (await this.waitForCleanupAfterSignal(terminal) && terminal.cleanupScope === "process") return;',
         1,
     )
-    return f"{PATCH_MARKER}\n{text}"
+    encoding_literal = json.dumps(windows_cmd_encoding)
+    adaptive_decoder = '''
+function createAdaptiveOutputDecoder(fallbackEncoding) {
+\tlet mode;
+\tlet pending = Buffer.alloc(0);
+\tconst utf8Decoder = new TextDecoder("utf-8");
+\tconst fallbackDecoder = new TextDecoder(fallbackEncoding);
+\tconst isUtf8 = (bytes) => {
+\t\ttry {
+\t\t\tnew TextDecoder("utf-8", { fatal: true }).decode(bytes);
+\t\t\treturn true;
+\t\t} catch {
+\t\t\treturn false;
+\t\t}
+\t};
+\tconst convert = (bytes, final = false) => Buffer.from(
+\t\t(mode === "fallback" ? fallbackDecoder : utf8Decoder).decode(bytes, { stream: !final }),
+\t\t"utf8"
+\t);
+\treturn {
+\t\tdecode(chunk) {
+\t\t\tif (mode) return convert(chunk);
+\t\t\tpending = Buffer.concat([pending, chunk]);
+\t\t\tif (!pending.includes(10)) return Buffer.alloc(0);
+\t\t\tmode = isUtf8(pending) ? "utf8" : "fallback";
+\t\t\tconst bytes = pending;
+\t\t\tpending = Buffer.alloc(0);
+\t\t\treturn convert(bytes);
+\t\t},
+\t\tflush() {
+\t\t\tif (!mode && pending.length > 0) mode = isUtf8(pending) ? "utf8" : "fallback";
+\t\t\tconst bytes = pending;
+\t\t\tpending = Buffer.alloc(0);
+\t\t\treturn mode ? convert(bytes, true) : bytes;
+\t\t}
+\t};
+}
+'''.strip()
+    return (
+        f"{PATCH_MARKER}\nconst WINDOWS_CMD_OUTPUT_ENCODING = {encoding_literal};\n"
+        f"{adaptive_decoder}\n{text}"
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -366,6 +417,38 @@ def _pwsh_info() -> tuple[str, str]:
     if result.returncode != 0 or major < 7:
         raise AcpxRuntimeError(f"PowerShell 7 or newer is required, got {version!r}")
     return str(Path(executable).resolve()), version
+
+
+def _windows_cmd_encoding() -> tuple[int, str]:
+    if sys.platform != "win32":
+        return 65001, "utf-8"
+    import ctypes
+
+    code_page = int(ctypes.windll.kernel32.GetOEMCP())
+    labels = {
+        65001: "utf-8",
+        936: "gbk",
+        950: "big5",
+        932: "shift_jis",
+        949: "euc-kr",
+        874: "windows-874",
+        866: "ibm866",
+        1250: "windows-1250",
+        1251: "windows-1251",
+        1252: "windows-1252",
+        1253: "windows-1253",
+        1254: "windows-1254",
+        1255: "windows-1255",
+        1256: "windows-1256",
+        1257: "windows-1257",
+        1258: "windows-1258",
+    }
+    try:
+        return code_page, labels[code_page]
+    except KeyError as exc:
+        raise AcpxRuntimeError(
+            f"unsupported Windows cmd OEM code page {code_page}; no safe TextDecoder mapping"
+        ) from exc
 
 
 def default_runtime_root() -> Path:
@@ -438,7 +521,11 @@ def install_managed_runtime(
     for item in package.rglob("*"):
         if item.is_symlink():
             raise AcpxRuntimeError(f"refusing symlink in acpx package: {item}")
-    patched = patch_acpx_javascript(source_js.read_text(encoding="utf-8"))
+    windows_cmd_code_page, windows_cmd_encoding = _windows_cmd_encoding()
+    patched = patch_acpx_javascript(
+        source_js.read_text(encoding="utf-8"),
+        windows_cmd_encoding=windows_cmd_encoding,
+    )
     patched_hash = hashlib.sha256(patched.encode("utf-8")).hexdigest()
     powershell_path, powershell_version = _pwsh_info()
     runtime_id = f"acpx-{ACPX_VERSION}-gw-win-{patched_hash[:12]}"
@@ -465,6 +552,8 @@ def install_managed_runtime(
                     entry_sha256=_sha256(staged_entry),
                     powershell_path=powershell_path,
                     powershell_version=powershell_version,
+                    windows_cmd_code_page=windows_cmd_code_page,
+                    windows_cmd_encoding=windows_cmd_encoding,
                 )
                 _atomic_write_json(staging / "manifest.json", asdict(receipt))
                 staging.rename(target)
@@ -499,6 +588,12 @@ def _verify_receipt(root: Path, receipt: RuntimeReceipt) -> None:
     current_pwsh = which("pwsh")
     if not current_pwsh or Path(current_pwsh).resolve() != Path(receipt.powershell_path).resolve():
         raise AcpxRuntimeError("managed acpx PowerShell 7 dependency changed; reinstall the runtime")
+    code_page, encoding = _windows_cmd_encoding()
+    if (code_page, encoding) != (
+        receipt.windows_cmd_code_page,
+        receipt.windows_cmd_encoding,
+    ):
+        raise AcpxRuntimeError("Windows cmd code page changed; reinstall the managed runtime")
 
 
 def resolve_managed_acpx_command(

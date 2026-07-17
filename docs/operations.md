@@ -41,8 +41,9 @@ or bound to a different PowerShell 7 executable. `--acpx-bin` is an explicit
 test/development override; there is no silent fallback to global acpx or WSL.
 
 The managed runtime routes PowerShell terminal work and process snapshots
-through PowerShell 7, explicitly sets UTF-8 for PowerShell output, transcodes
-the unavoidable `cmd /u` fallback from UTF-16LE to UTF-8, batches
+through PowerShell 7, explicitly sets UTF-8 for PowerShell output, records the
+machine OEM code page and adaptively transcodes captured UTF-8/OEM `cmd` output
+without changing redirection semantics, batches
 concurrent CIM snapshots, uses Windows process-tree cleanup for cancellation,
 and never uses Windows `detached` terminal launches. These constraints preserve
 ACP pipes and prevent transient console windows from taking focus.
