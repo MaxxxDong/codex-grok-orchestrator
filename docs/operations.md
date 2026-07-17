@@ -47,6 +47,8 @@ without changing redirection semantics, batches
 concurrent CIM snapshots, uses Windows process-tree cleanup for cancellation,
 and never uses Windows `detached` terminal launches. These constraints preserve
 ACP pipes and prevent transient console windows from taking focus.
+Worker subprocesses also inherit Python UTF-8 mode (`PYTHONUTF8=1` and
+`PYTHONIOENCODING=utf-8`) so redirected Unicode logs do not fall back to GBK.
 
 The native runtime reads the user's normal Grok configuration directly from:
 

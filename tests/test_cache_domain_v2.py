@@ -34,6 +34,8 @@ def test_shared_cache_environment_covers_python_and_node(tmp_path: Path) -> None
     root = tmp_path / "cache"
     env = shared_cache_environment(root)
     assert env["UV_CACHE_DIR"] == str(root / "uv")
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
     assert env["PIP_CACHE_DIR"] == str(root / "pip")
     assert env["NPM_CONFIG_CACHE"] == str(root / "npm")
     assert env["POETRY_CACHE_DIR"] == str(root / "poetry")

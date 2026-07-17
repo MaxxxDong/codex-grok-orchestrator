@@ -48,7 +48,7 @@ def _resolve_disposable(disposable_root: Path | None, source: Path | None) -> Pa
         return Path(disposable_root).resolve()
     if source is not None:
         return default_disposable_root(Path(source)).resolve()
-    return (Path.cwd() / ".grok-disposable").resolve()
+    return default_disposable_root(Path.cwd()).resolve()
 
 
 def cmd_run(
