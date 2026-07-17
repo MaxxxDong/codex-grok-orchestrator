@@ -15,6 +15,15 @@ The source repository remains canonical. Workers operate in disposable clones an
 
 On native Windows, use the installed `grok-worker.exe` entry. It runs the same Python lifecycle implementation with Windows process locks and reads `%USERPROFILE%\.grok\config.toml` as the single active Grok configuration; do not route through WSL or maintain a second provider config.
 
+Before the first Windows run in a task, resolve both paths explicitly:
+
+```powershell
+$repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
+(Get-Command grok-worker).Source
+```
+
+The command must resolve to `%USERPROFILE%\.local\bin\grok-worker.exe`. Pass the resolved Windows repository path to `--source`; do not translate it to `/mnt/c/...`.
+
 ## Choose a run mode
 
 - Use `run` for one bounded task that fits one prompt.
@@ -22,6 +31,19 @@ On native Windows, use the installed `grok-worker.exe` entry. It runs the same P
 - Use `--mode analysis` for read-only work. Use `--mode implementation` only when repository edits are expected.
 
 ## Minimal workflow
+
+Native Windows PowerShell:
+
+```powershell
+$repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
+$promptFile = Join-Path $env:TEMP "grok-worker-task.md"
+grok-worker status --source $repo --json
+grok-worker run --source $repo --mode implementation --task-id focused-change --prompt-file $promptFile
+```
+
+The prompt file must already exist. Prefer a prompt file for multiline tasks so PowerShell, batch wrappers, and ACP receive byte-identical text.
+
+POSIX shells:
 
 Preflight:
 
