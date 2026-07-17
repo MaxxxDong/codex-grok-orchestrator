@@ -93,7 +93,7 @@ def test_windows_acpx_bypasses_batch_for_multiline_prompts() -> None:
 def test_windows_agent_path_uses_forward_slashes_for_acpx(tmp_path: Path) -> None:
     agent = tmp_path / "agent.exe"
     agent.write_bytes(b"placeholder")
-    cfg = RunConfig(source=tmp_path, prompt="test", model="test-model")
+    cfg = RunConfig(source=tmp_path, prompt="test", model="test-model", acpx_bin="acpx")
     command = build_acpx_cmd(cfg, tmp_path, str(agent), "prompt")
     value = command[command.index("--agent") + 1]
     assert "\\" not in value
@@ -253,6 +253,7 @@ def test_windows_metadata_failure_reaps_started_acpx(
         prepare_deps=False,
         task_id="orphan-test",
         skip_post_gc=True,
+        acpx_bin="acpx",
     )
 
     with pytest.raises(PermissionError):

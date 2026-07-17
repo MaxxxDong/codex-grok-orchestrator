@@ -15,14 +15,17 @@ The source repository remains canonical. Workers operate in disposable clones an
 
 On native Windows, use the installed `grok-worker.exe` entry. It runs the same Python lifecycle implementation with Windows process locks and reads `%USERPROFILE%\.grok\config.toml` as the single active Grok configuration; do not route through WSL or maintain a second provider config.
 
-Before the first Windows run in a task, resolve both paths explicitly:
+Before the first Windows run in a task, verify the single managed acpx runtime
+and resolve both paths explicitly:
 
 ```powershell
+grok-worker acpx-runtime-status
 $repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
 (Get-Command grok-worker).Source
 ```
 
 The command must resolve to `%USERPROFILE%\.local\bin\grok-worker.exe`. Pass the resolved Windows repository path to `--source`; do not translate it to `/mnt/c/...`.
+If runtime status fails, stop and report it; do not fall back to global acpx or WSL.
 
 ## Choose a run mode
 

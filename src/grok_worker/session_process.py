@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from grok_worker.acpx_runtime import managed_runtime_identity
 from grok_worker.cache_policy import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_TTL_HOURS,
@@ -41,7 +43,7 @@ class SessionConfig:
     disposable_root: Path
     artifact_root: Path
     shared_cache_root: Path
-    acpx_bin: str = "acpx"
+    acpx_bin: str | None = None
     agent_bin: str | None = None
     mcp_config: str | None = None
     model: str = ""
@@ -73,6 +75,10 @@ class SessionOutcome:
 
 
 def permission_contract_signature(cfg: SessionConfig) -> str:
+    if cfg.acpx_bin is None and sys.platform == "win32":
+        acpx_runtime = f"managed:{managed_runtime_identity()}"
+    else:
+        acpx_runtime = "explicit:" + "\0".join(resolve_acpx_command(cfg.acpx_bin))
     return permission_signature(
         mode=cfg.mode,
         agent=cfg.agent_bin or default_agent_bin(),
@@ -80,6 +86,7 @@ def permission_contract_signature(cfg: SessionConfig) -> str:
         model=cfg.model,
         reasoning_effort=cfg.reasoning_effort,
         allow_subagents=cfg.allow_subagents,
+        acpx_runtime=acpx_runtime,
     )
 
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 
+from grok_worker.acpx_runtime import resolve_managed_acpx_command
 from grok_worker.cache_policy import DEFAULT_CACHE_MAX_BYTES, DEFAULT_CACHE_TTL_HOURS
 from grok_worker.constants import (
     DEFAULT_ACPX_TIMEOUT,
@@ -29,7 +30,7 @@ class RunConfig:
     mode: str = "implementation"
     timeout: int = DEFAULT_ACPX_TIMEOUT
     task_id: str | None = None
-    acpx_bin: str = "acpx"
+    acpx_bin: str | None = None
     agent_bin: str | None = None
     mcp_config: str | None = None
     model: str = ""
@@ -89,8 +90,12 @@ def resolve_executable(command: str) -> str:
     return which(command) or command
 
 
-def resolve_acpx_command(command: str) -> list[str]:
+def resolve_acpx_command(command: str | None) -> list[str]:
     """Resolve acpx without a Windows batch hop that truncates multiline prompts."""
+    if command is None:
+        if sys.platform == "win32":
+            return resolve_managed_acpx_command()
+        command = "acpx"
     resolved = Path(resolve_executable(command))
     if sys.platform == "win32" and resolved.suffix.lower() in {".cmd", ".bat"}:
         entry = resolved.parent / "node_modules" / "acpx" / "dist" / "cli.js"

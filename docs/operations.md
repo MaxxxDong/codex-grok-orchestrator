@@ -23,9 +23,28 @@ transactions use shared/exclusive `LockFileEx` byte-range locks through the
 standard library; per-worker lock files live under the disposable root's hidden
 `.grok-worker-locks` directory so a verified clone can be removed after success.
 
-Install `grok-worker`, `grok-worker-agent`, `acpx`, and Grok Build on the native
-Windows `PATH`. The process launcher resolves `.exe` and `.cmd` entries before
-calling them with `shell=False`.
+Install `grok-worker`, `grok-worker-agent`, Node.js, PowerShell 7 (`pwsh`), and
+Grok Build on the native Windows `PATH`. Before the first worker, build the
+immutable grok-worker-owned acpx runtime from the pinned `acpx 0.12.0` package:
+
+```powershell
+grok-worker acpx-runtime-install
+grok-worker acpx-runtime-status
+```
+
+The installer verifies the exact upstream JavaScript hash, copies the package
+under `%LOCALAPPDATA%\grok-worker\runtimes\acpx`, applies the audited Windows
+terminal patch to that copy, and writes a hash-verified `current.json` pointer.
+It never edits the global npm package. Normal one-shot and named-session runs
+resolve only this managed runtime and fail closed if it is missing, corrupted,
+or bound to a different PowerShell 7 executable. `--acpx-bin` is an explicit
+test/development override; there is no silent fallback to global acpx or WSL.
+
+The managed runtime routes PowerShell terminal work and process snapshots
+through PowerShell 7, explicitly sets UTF-8 for command output, batches
+concurrent CIM snapshots, uses Windows process-tree cleanup for cancellation,
+and never uses Windows `detached` terminal launches. These constraints preserve
+ACP pipes and prevent transient console windows from taking focus.
 
 The native runtime reads the user's normal Grok configuration directly from:
 

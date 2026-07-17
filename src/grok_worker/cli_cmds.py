@@ -62,7 +62,11 @@ def cmd_run(
     mode: str = typer.Option("implementation", "--mode"),
     timeout: int = typer.Option(1800, "--timeout"),
     task_id: str | None = typer.Option(None, "--task-id"),
-    acpx_bin: str = typer.Option("acpx", "--acpx-bin"),
+    acpx_bin: str | None = typer.Option(
+        None,
+        "--acpx-bin",
+        help="Explicit acpx override (default: pinned grok-worker runtime on Windows)",
+    ),
     agent_bin: str | None = typer.Option(None, "--agent-bin"),
     mcp_config: str | None = typer.Option(None, "--mcp-config"),
     model: str | None = typer.Option(None, "--model"),
