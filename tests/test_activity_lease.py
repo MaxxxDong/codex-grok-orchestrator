@@ -10,6 +10,7 @@ import pytest
 
 from grok_worker.activity_lease import (
     LEASE_TIMEOUT_EXIT_CODE,
+    ActivityProbe,
     LeaseError,
     initialize_lease,
     lease_summary,
@@ -32,6 +33,17 @@ def _clone(tmp_path: Path) -> Path:
 
 def _python_sleep(seconds: float) -> list[str]:
     return [sys.executable, "-c", f"import time; time.sleep({seconds})"]
+
+
+def test_activity_probe_uses_child_managed_home(tmp_path: Path) -> None:
+    clone = _clone(tmp_path)
+    managed_home = tmp_path / "managed-home"
+    probe = ActivityProbe(
+        clone,
+        environ={"GROK_WORKER_GROK_HOME": str(managed_home)},
+    )
+
+    assert probe.session_root.is_relative_to(managed_home / "sessions")
 
 
 def test_policy_can_change_while_lease_is_live(tmp_path: Path) -> None:

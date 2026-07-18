@@ -42,8 +42,8 @@ Deletion targets must be direct managed children of the configured disposable ro
 
 Mode, agent entry, MCP config, model, reasoning profile, and subagent policy form a permission signature. Named-session follow-ups must match the original immutable contract; drift requires a new session.
 
-The agent process uses a managed Grok home derived from the canonical active
-model profile. Provider credentials are injected only into the child
+The agent process uses a clone-scoped managed Grok home derived from the
+canonical active model profile. Provider credentials are injected only into the child
 environment. User marketplaces, plugins, and Grok-level MCP servers are absent
 by default and verified through `grok inspect`; explicit ACP MCP configuration
 remains a separate, observable task input.
@@ -60,15 +60,15 @@ Managed Grok session events and bounded filesystem signals renew the lease;
 mere PID existence does not. Operators can change either policy without
 restarting the ACP session.
 
-### 7. Observability stays secret-minimal
+### 8. Observability stays secret-minimal
 
 Notifications contain identifiers, terminal state, timestamps, and artifact pointers—not prompts, API keys, tokens, environment maps, stdout, stderr, or model output. Lifecycle truth is re-read after every wake-up.
 
-### 8. Configuration changes are transactional
+### 9. Configuration changes are transactional
 
 Config apply parses the candidate first, writes atomically, runs a bounded shell-free smoke command, and restores the exact original bytes on failure or timeout. Receipts contain hashes and state, never config bodies or captured output.
 
-### 9. Integration remains a reviewer decision
+### 10. Integration remains a reviewer decision
 
 Workers produce evidence; they do not merge, push, publish, submit, or approve their own work. The dispatcher or human reviewer owns acceptance and external side effects.
 

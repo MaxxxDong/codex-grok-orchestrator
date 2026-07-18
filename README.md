@@ -152,7 +152,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 ### 安全边界
 
 - 公共核心**允许**显式配置模型与推理强度；不要把私有调度策略说成全局硬锁。
-- Worker 允许最多 3 个不重叠的并发子代理；不需要时用 `--no-subagents` 显式关闭。
+- 稳定 Worker 提示词要求最多使用 3 个不重叠的并发子代理；runner 通过 `--no-subagents` 提供硬关闭，而数量上限由 Grok 遵守提示词策略。
 - 删除与 GC 对源仓库、家目录、制品目录、共享缓存与 disposable 根目录保护。
 - 个人路径、API Key、OAuth、代理/中转、在线 MCP、比赛 Gate 与组织审批链属于**私有叠加层**，不得进入公共核心。
 
@@ -308,7 +308,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 ### Safety boundaries
 
 - The public core **allows** explicit model and reasoning configuration.
-- Workers allow at most 3 non-overlapping concurrent subagents; use `--no-subagents` to disable them explicitly.
+- The stable Worker prompt asks for at most 3 non-overlapping concurrent subagents. The runner hard-disables subagents with `--no-subagents`; the numeric cap is prompt-enforced by Grok.
 - Deletion and GC protect the source, home, artifact root, shared cache, and disposable root.
 - Personal paths, API keys, OAuth, relays, live MCP, competition gates, and org approval chains belong in **private overlays**, not the public core.
 

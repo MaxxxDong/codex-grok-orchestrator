@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -55,6 +56,16 @@ def worker_grok_home(environ: Mapping[str, str] = os.environ) -> Path:
     data_home = environ.get("XDG_DATA_HOME", "").strip()
     base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
     return (base / "grok-worker" / "grok-home").resolve()
+
+
+def scoped_worker_grok_home(
+    scope: Path | str,
+    environ: Mapping[str, str] = os.environ,
+) -> Path:
+    """Return one stable managed home for a worker clone or named session."""
+    identity = str(Path(scope).expanduser().resolve()).encode("utf-8")
+    digest = hashlib.sha256(identity).hexdigest()[:24]
+    return worker_grok_home(environ) / "workers" / digest
 
 
 def _toml_key(value: str) -> str:

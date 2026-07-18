@@ -15,6 +15,7 @@ from grok_worker.grok_profile import (
     WORKER_API_KEY_ENV,
     GrokProfileError,
     prepare_isolated_profile,
+    scoped_worker_grok_home,
     validate_isolated_profile,
 )
 
@@ -145,6 +146,57 @@ def test_profile_first_refresh_is_concurrency_safe(tmp_path: Path) -> None:
         assert list(pool.map(lambda _: prepare(), range(16))) == ["secret-value"] * 16
     assert tomllib.loads((profile_home / "config.toml").read_text(encoding="utf-8"))
     assert (profile_home / PROFILE_MARKER).is_file()
+
+
+def test_scoped_worker_homes_are_stable_and_isolated(tmp_path: Path) -> None:
+    environ = {"GROK_WORKER_GROK_HOME": str(tmp_path / "managed-root")}
+    first = scoped_worker_grok_home(tmp_path / "clone-a", environ)
+    repeated = scoped_worker_grok_home(tmp_path / "clone-a", environ)
+    second = scoped_worker_grok_home(tmp_path / "clone-b", environ)
+
+    assert first == repeated
+    assert first != second
+    assert first.parent == tmp_path / "managed-root" / "workers"
+
+
+def test_concurrent_models_use_distinct_managed_homes(tmp_path: Path) -> None:
+    source = _source_home(tmp_path)
+    with (source / "config.toml").open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n[model."grok-fast"]\n'
+            'model = "grok-fast"\n'
+            'base_url = "https://example.invalid/v1"\n'
+            'api_backend = "responses"\n'
+            'api_key = "other-secret"\n'
+        )
+    base_environ = {
+        "GROK_WORKER_SOURCE_GROK_HOME": str(source),
+        "GROK_WORKER_GROK_HOME": str(tmp_path / "managed-root"),
+    }
+
+    def prepare(model: str, clone: str) -> Path:
+        environ = dict(base_environ)
+        environ["GROK_WORKER_GROK_HOME"] = str(
+            scoped_worker_grok_home(tmp_path / clone, base_environ)
+        )
+        return prepare_isolated_profile(
+            model_id=model,
+            reasoning_effort="high",
+            environ=environ,
+        ).home
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        grok_home, fast_home = list(
+            pool.map(lambda args: prepare(*args), [("grok-4.5", "a"), ("grok-fast", "b")])
+        )
+
+    assert grok_home != fast_home
+    assert tomllib.loads((grok_home / "config.toml").read_text(encoding="utf-8"))[
+        "models"
+    ]["default"] == "grok-4.5"
+    assert tomllib.loads((fast_home / "config.toml").read_text(encoding="utf-8"))[
+        "models"
+    ]["default"] == "grok-fast"
 
 
 def _fake_grok(tmp_path: Path, payload: str) -> Path:

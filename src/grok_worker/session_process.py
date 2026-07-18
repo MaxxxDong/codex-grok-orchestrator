@@ -14,6 +14,7 @@ from grok_worker.cache_policy import (
 )
 from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_CAP_BYTES, DEFAULT_HARD_TIMEOUT
 from grok_worker.deps import prepare_shared_env
+from grok_worker.grok_profile import scoped_worker_grok_home
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
@@ -144,6 +145,7 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
     )
     env["GROK_WORKER_LIFECYCLE"] = "1"
     env["GROK_WORKER_TASK_ID"] = state.task_id
+    env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, env))
     lease = cache_use_lease(cfg.shared_cache_root)
     with worker_lock(meta_dir(clone)), lease:
         dep_env: dict[str, str] = {}

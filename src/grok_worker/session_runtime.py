@@ -18,6 +18,7 @@ from grok_worker.dispatcher import (
 )
 from grok_worker.finalize import finalize_run
 from grok_worker.gc import gc_disposable_root
+from grok_worker.grok_profile import scoped_worker_grok_home
 from grok_worker.locks import root_lock, worker_lock
 from grok_worker.metrics import read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -198,6 +199,7 @@ def finalize_session(cfg: SessionConfig) -> SessionOutcome:
     )
     close_env["GROK_WORKER_LIFECYCLE"] = "1"
     close_env["GROK_WORKER_TASK_ID"] = state.task_id
+    close_env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, close_env))
 
     lease: DispatcherLease | None = None
     # Bound before invoke so a raising close cannot UnboundLocalError later.

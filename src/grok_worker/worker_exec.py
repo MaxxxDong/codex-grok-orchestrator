@@ -18,6 +18,7 @@ from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
 from grok_worker.gc import gc_disposable_root
+from grok_worker.grok_profile import scoped_worker_grok_home
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text, read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState
@@ -136,6 +137,7 @@ def execute_worker(
         )
         env["GROK_WORKER_LIFECYCLE"] = "1"
         env["GROK_WORKER_TASK_ID"] = task_id
+        env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, env))
         cmd = build_acpx_cmd(cfg, clone, agent, prompt)
 
         agent_log.write_bytes(b"")

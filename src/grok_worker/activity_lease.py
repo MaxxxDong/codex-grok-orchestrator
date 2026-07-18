@@ -207,11 +207,16 @@ def record_activity(clone: Path, observation: ActivityObservation) -> LeaseState
 class ActivityProbe:
     """Collect bounded worker-owned activity without reading prompts or output content."""
 
-    def __init__(self, clone: Path, agent_log: Path | None = None) -> None:
+    def __init__(
+        self,
+        clone: Path,
+        agent_log: Path | None = None,
+        environ: dict[str, str] | None = None,
+    ) -> None:
         self.clone = clone.resolve()
         self.agent_log = agent_log
         encoded = quote(str(self.clone), safe="")
-        self.session_root = worker_grok_home() / "sessions" / encoded
+        self.session_root = worker_grok_home(environ or os.environ) / "sessions" / encoded
         self._last_workspace_scan = 0.0
         self._workspace_observation: ActivityObservation | None = None
 
@@ -263,7 +268,7 @@ def run_with_activity_lease(
             idle_timeout_seconds=idle_timeout_seconds,
             hard_timeout_seconds=hard_timeout_seconds,
         )
-    probe = ActivityProbe(clone, log)
+    probe = ActivityProbe(clone, log, env)
     with log.open("ab") as stream:
         process = subprocess.Popen(
             command,

@@ -33,7 +33,7 @@ This release promotes the verified 0.4 runtime used by the maintainer into the p
 
 **Grok isolation**
 
-- Every ACP process derives a private managed `GROK_HOME` from the selected model profile.
+- Every Worker clone derives a private managed `GROK_HOME` from the selected model profile; concurrent clones cannot overwrite one another's config.
 - Provider credentials are resolved in memory and passed only to the child process; derived TOML contains no plaintext API key.
 - User marketplaces, plugins, and Grok-level MCP servers fail closed after `grok inspect --json`.
 - `[claude_compat] imported = true` prevents a repository-root `.mcp.json` from entering managed sessions while the fail-closed inspection remains authoritative.
@@ -41,7 +41,7 @@ This release promotes the verified 0.4 runtime used by the maintainer into the p
 
 **Execution policy and evidence**
 
-- Workers may use at most 3 non-overlapping concurrent subagents; the lead worker owns integration and the structured result contract.
+- The stable Worker prompt permits at most 3 non-overlapping concurrent subagents; this numeric cap is prompt-enforced. `--no-subagents` remains the runtime hard-disable, and the lead Worker owns integration and the structured result contract.
 - Dirty-source inclusion uses repeatable `--include-dirty-path PATH`; bare `--include-dirty` is refused when nonignored dirt exists.
 - External success remains exactly three files: `changes.patch`, `worker.log`, and `verification.txt`.
 - Result artifacts now record effective lease policy and observable token/cache metrics without claiming unavailable provider data.
@@ -70,7 +70,7 @@ This release promotes the verified 0.4 runtime used by the maintainer into the p
 
 **Grok 隔离**
 
-- 每个 ACP 进程都会从选中模型生成私有、托管的 `GROK_HOME`。
+- 每个 Worker clone 都会从选中模型生成私有、托管的 `GROK_HOME`；并发 clone 不会互相覆盖配置。
 - 服务商凭据仅在内存解析并注入子进程；派生 TOML 不保存明文 API Key。
 - 用户 marketplace、plugin 和 Grok 级 MCP 在 `grok inspect --json` 后 fail-closed。
 - `[claude_compat] imported = true` 阻止仓库根 `.mcp.json` 进入托管会话，同时保留 inspect 安全门作为权威检查。
@@ -78,7 +78,7 @@ This release promotes the verified 0.4 runtime used by the maintainer into the p
 
 **执行策略与证据**
 
-- Worker 最多使用 3 个写范围不重叠的并发子代理；主 Worker 负责集成和结构化结果契约。
+- 稳定 Worker 提示词要求最多使用 3 个写范围不重叠的并发子代理；该数量上限由提示词约束，`--no-subagents` 仍提供运行时硬关闭。主 Worker 负责集成和结构化结果契约。
 - 未提交源状态改为重复使用 `--include-dirty-path PATH` 精确授权；存在非忽略脏文件时拒绝裸 `--include-dirty`。
 - 成功任务的外部制品仍严格只有 `changes.patch`、`worker.log`、`verification.txt` 三个文件。
 - 制品记录实际生效的租约策略，以及仅在服务商可观测时记录 token/cache 指标。

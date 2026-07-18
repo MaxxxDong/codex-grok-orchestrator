@@ -2,7 +2,7 @@
 
 All notable public changes are recorded here. The project follows semantic versioning while the CLI is pre-1.0.
 
-## [0.4.2] - 2026-07-18
+## [0.4.2] - 2026-07-19
 
 ### Added
 
@@ -21,6 +21,8 @@ All notable public changes are recorded here. The project follows semantic versi
 - Isolated worker profiles set `[claude_compat] imported = true` so repository
   `.mcp.json` is not discovered into managed sessions; `grok inspect --json`
   remains the fail-closed enforcement for empty plugins/MCP.
+- Managed `GROK_HOME` directories are scoped by disposable clone so concurrent
+  workers using different model profiles cannot overwrite each other's config.
 
 ## [0.4.1] - 2026-07-18
 
@@ -69,6 +71,9 @@ All notable public changes are recorded here. The project follows semantic versi
   (migration to `--include-dirty-path`); ignored-only dirt remains excluded.
 - Named sessions take transient slot leases around ACP turns only; idle
   `SESSION_OPEN` is removed from capacity budgets.
+- Nested subagents are enabled by default; the stable Worker prompt limits use
+  to at most 3 non-overlapping concurrent subagents. `--no-subagents` remains
+  the runtime-enforced opt-out.
 - Removed roots.json / advisory slot-pointer reservation design.
 - Default event wait is 30 seconds (was immediate 0).
 
