@@ -1,11 +1,11 @@
-# Windows / WSL upgrade: 0.3/0.4 to 0.5.0
+# Windows / WSL upgrade: 0.3/0.4 to 0.5.1
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
 
-## What changes in 0.5.0
+## What changes in 0.5.1
 
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
@@ -51,7 +51,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.5.0 --depth 1 \
+git clone --branch v0.5.1 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 
@@ -139,7 +139,7 @@ grok-worker run \
 ```
 
 Named `session-start` / `session-followup` / `session-finalize` commands remain
-ACP-backed in 0.5.0.
+ACP-backed in 0.5.x.
 
 ## Migration cautions
 

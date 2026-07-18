@@ -16,6 +16,7 @@ from grok_worker.activity_lease import (
     terminate_process_tree,
 )
 from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
+from grok_worker.constants import OUTPUT_DIR_NAME
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
 from grok_worker.gc import gc_disposable_root
@@ -84,6 +85,20 @@ def execute_worker(
                 dep_env.update(prepare_shared_env(clone, shared))
             except DepsError as exc:
                 startup_warnings.append(f"dependency prewarm skipped: {exc}")
+        if cfg.backend == "native":
+            # Grok's workspace sandbox cannot write the host-level shared cache.
+            # Keep prepared environments shared/read-only, but place mutable tool
+            # caches inside the disposable clone so verification starts cleanly.
+            runtime_cache = clone / OUTPUT_DIR_NAME / ".runtime-cache"
+            runtime_cache.mkdir(parents=True, mode=0o700, exist_ok=True)
+            dep_env.update(
+                {
+                    "UV_CACHE_DIR": str(runtime_cache / "uv"),
+                    "PIP_CACHE_DIR": str(runtime_cache / "pip"),
+                    "NPM_CONFIG_CACHE": str(runtime_cache / "npm"),
+                    "POETRY_CACHE_DIR": str(runtime_cache / "poetry"),
+                }
+            )
         oneshot_mode = "research" if cfg.prompt_only else cfg.mode
         try:
             prompt = build_one_shot_prompt(None, oneshot_mode, cfg.prompt)

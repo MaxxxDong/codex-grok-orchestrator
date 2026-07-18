@@ -7,6 +7,23 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-19 — Native sandbox cache hotfix / 原生沙箱缓存热修
+
+**Version:** `grok-worker` 0.5.1
+
+Native workers now keep mutable UV/PIP/NPM/Poetry caches under the disposable
+workspace while reusing prepared shared environments read-only. This removes
+the permission-failure/retry cycle seen when Grok's workspace sandbox tried to
+write the host cache. The release also adds `grok-worker --version` and verifies
+it from a clean installed wheel in CI.
+
+Native Worker 现在把会写入的 UV/PIP/NPM/Poetry 缓存放在 disposable workspace
+内，同时继续只读复用共享依赖环境，消除 Grok workspace 沙箱写宿主缓存时的
+权限失败与绕路重试。本版本还新增 `grok-worker --version`，并在 CI 中从干净
+安装的 wheel 验证该命令。
+
+---
+
 ## 2026-07-19 — Native headless and lower-friction startup / 原生执行与启动提效
 
 **Version:** `grok-worker` 0.5.0
@@ -115,7 +132,7 @@ not claim a cache hit for that relay/task combination.
 output、252 reasoning tokens；ACP quiet 输出不暴露 token。相同 Native 请求连续
 三次均为 0 cache-read，因此本版本不宣称该渠道/任务已经命中缓存。
 
-Windows 请按 [0.3/0.4 → 0.5.0 WSL2 升级指南](../windows-upgrade.md)执行。
+Windows 请按 [0.3/0.4 → 0.5.1 WSL2 升级指南](../windows-upgrade.md)执行。
 
 ---
 

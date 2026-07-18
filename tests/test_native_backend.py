@@ -77,7 +77,9 @@ cat > "$cwd/.grok-output/result.json" <<'JSON'
   }]
 }
 JSON
-printf '%s\n%s\n%s\n' "$HOME" "${GROK_HOME-unset}" "$args" > "$cwd/.grok-output/native-env.txt"
+printf '%s\n%s\n%s\n%s\n%s\n' \
+  "$HOME" "${GROK_HOME-unset}" "$args" "$UV_CACHE_DIR" "$GROK_SHARED_VENV_ROOT" \
+  > "$cwd/.grok-output/native-env.txt"
 printf '%s%s\n' \
   '{"text":"native ok","thought":"checked","usage":{"input_tokens":4096,' \
   '"cache_read_input_tokens":2048,"output_tokens":128,"reasoning_tokens":77}}'
@@ -133,7 +135,7 @@ def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
     assert outcome.state == "keep"
     clone = Path(outcome.clone_path or "")
     assert (clone / ".mcp.json").is_file()
-    home, grok_home, args = (
+    home, grok_home, args, uv_cache, shared_venvs = (
         (clone / ".grok-output/native-env.txt").read_text(encoding="utf-8").splitlines()
     )
     runtime_home = Path(home)
@@ -142,6 +144,8 @@ def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
     assert grok_home == "unset"
     assert "--reasoning-effort high" in args
     assert "--prompt-file" in args
+    assert Path(uv_cache) == clone / ".grok-output/.runtime-cache/uv"
+    assert Path(shared_venvs) == tmp_roots["shared"] / "venvs"
 
     metrics = [
         json.loads(line)

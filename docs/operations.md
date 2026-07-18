@@ -203,7 +203,7 @@ lifecycle remains the authority for worker state and terminal outcome.
 - `grok-worker run` defaults to `--backend native`, which directly invokes Grok
   Build headless with a prompt file and JSON output.
 - `--backend acp` retains the previous transport. Named sessions remain ACP-only
-  in 0.5.0.
+  in 0.5.x.
 - The isolated profile uses a stable source/config/effort-keyed runtime `HOME`
   and native `~/.grok`; it never sets `GROK_HOME` for the child. Different
   providers or efforts cannot overwrite one another. Plugins/MCP are empty
@@ -211,6 +211,9 @@ lifecycle remains the authority for worker state and terminal outcome.
   High reasoning support is explicit.
 - Native `analysis` and `research` use Grok's OS `read-only` sandbox plus `plan`
   permission mode. Implementation alone receives workspace write approval.
+- Native mutable UV/PIP/NPM/Poetry caches live under the disposable
+  `.grok-output/.runtime-cache`; prepared environments remain shared and
+  read-only. This avoids host-cache permission retries inside Grok's sandbox.
 - The selected worker model is also used for session summaries, preventing the
   built-in `grok-build` auxiliary model from reaching an incompatible relay.
 - A warning that Grok ignored requested reasoning effort changes the backend
@@ -339,6 +342,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.5.0`. Lifecycle and artifact formats remain
+The current public release is `0.5.1`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.

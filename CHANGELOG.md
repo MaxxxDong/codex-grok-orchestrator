@@ -2,6 +2,15 @@
 
 All notable public changes are recorded here. The project follows semantic versioning while the CLI is pre-1.0.
 
+## [0.5.1] - 2026-07-19
+
+### Fixed
+
+- Native workers now keep mutable UV/PIP/NPM/Poetry caches under the disposable
+  workspace while continuing to reuse prepared shared environments read-only.
+  This removes repeated sandbox permission failures against the host-level cache.
+- Added a standard `grok-worker --version` command and clean-wheel CI coverage.
+
 ## [0.5.0] - 2026-07-19
 
 ### Added
