@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from grok_worker.capacity import root_usage_bytes
-from grok_worker.constants import DEFAULT_CAP_BYTES, OUTPUT_DIR_NAME, RESULT_FILE_NAME
+from grok_worker.constants import (
+    DEFAULT_CAP_BYTES,
+    EXCLUDE_DIR_NAMES,
+    META_DIR_NAME,
+    OUTPUT_DIR_NAME,
+    RESULT_FILE_NAME,
+    VERIFICATION_DIR_NAME,
+)
 from grok_worker.gc import is_active, should_delete
 from grok_worker.models import WorkerMeta, WorkerState, dt_from_iso, meta_is_trusted, utc_now
 from grok_worker.paths import default_shared_cache_root, is_managed_clone, meta_dir, meta_path
@@ -20,6 +28,13 @@ from grok_worker.safety import dir_size_bytes
 # Timestamps more than this amount in the future of *now* are ignored so they
 # cannot override lifecycle ``updated_at`` or manufacture "recent" activity.
 CLOCK_SKEW_TOLERANCE = timedelta(seconds=5)
+MAX_ACTIVITY_SCAN_ENTRIES = 20_000
+MAX_ACTIVITY_SCAN_DEPTH = 16
+PROGRESS_STEPS = frozenset({"planning", "editing", "verifying", "finalizing"})
+_ACTIVITY_EXCLUDED_DIRS = (EXCLUDE_DIR_NAMES - {"build", "dist"}) | {
+    META_DIR_NAME,
+    OUTPUT_DIR_NAME,
+}
 
 _TERMINAL_INACTIVE_STATES = frozenset(
     {
@@ -53,9 +68,15 @@ class CloneStatus:
     # Per-clone summary (lifecycle-authoritative phase; progress is advisory).
     phase: str = ""
     last_activity_at: str = ""
+    activity_source: str = "lifecycle"
+    progress_step: str | None = None
     elapsed_seconds: float = 0.0
     timeout_seconds: float | int | None = None
     remaining_seconds: float | int | None = None
+    timeout_mode: str = "fixed_legacy"
+    hard_timeout_seconds: int | None = None
+    hard_remaining_seconds: float | None = None
+    lease_revision: int | None = None
     result_ready: bool = False
     artifact_ready: bool = False
     resources: dict[str, float | int | None] = field(default_factory=empty_resources)
@@ -156,13 +177,86 @@ def _phase_from_lifecycle(meta: WorkerMeta) -> str:
     return str(meta.state)
 
 
+def _progress_step(progress: dict[str, Any] | None) -> str | None:
+    """Return only the fixed advisory step vocabulary; never arbitrary worker text."""
+    if progress is None or progress.get("schema_version") != 1:
+        return None
+    step = progress.get("step")
+    if isinstance(step, str) and step in PROGRESS_STEPS:
+        return step
+    return None
+
+
+def _latest_regular_file_mtime(
+    root: Path,
+    *,
+    now: datetime,
+    excluded_dirs: frozenset[str] | set[str] = frozenset(),
+) -> datetime | None:
+    """Bounded, non-symlink scan for observable worker file activity.
+
+    The scan never follows symlinks, ignores managed/cache directories, and is
+    capped so status/health remain diagnostics rather than a project crawler.
+    """
+    if root.is_symlink() or not root.is_dir():
+        return None
+    latest: datetime | None = None
+    seen = 0
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    while stack and seen < MAX_ACTIVITY_SCAN_ENTRIES:
+        directory, depth = stack.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_ACTIVITY_SCAN_ENTRIES:
+                        break
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if depth < MAX_ACTIVITY_SCAN_DEPTH and entry.name not in excluded_dirs:
+                                stack.append((Path(entry.path), depth + 1))
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        stat_result = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    mtime = datetime.fromtimestamp(stat_result.st_mtime, tz=UTC)
+                    if not _is_usable_activity_time(mtime, now=now):
+                        continue
+                    if latest is None or mtime > latest:
+                        latest = mtime
+        except OSError:
+            continue
+    return latest
+
+
+def workspace_activity_at(clone: Path, *, now: datetime) -> datetime | None:
+    candidates = [
+        _latest_regular_file_mtime(
+            clone,
+            now=now,
+            excluded_dirs=_ACTIVITY_EXCLUDED_DIRS,
+        ),
+        _latest_regular_file_mtime(
+            clone / OUTPUT_DIR_NAME / VERIFICATION_DIR_NAME,
+            now=now,
+        ),
+    ]
+    usable = [item for item in candidates if item is not None]
+    return max(usable) if usable else None
+
+
 def _last_activity_at(
     meta: WorkerMeta,
     progress: dict[str, Any] | None,
     clone: Path,
     *,
     now: datetime,
-) -> str:
+    include_workspace: bool,
+) -> tuple[str, str]:
     """Pick the latest usable advisory/lifecycle activity time.
 
     Lifecycle ``updated_at`` remains the baseline. Progress timestamps and file
@@ -170,16 +264,16 @@ def _last_activity_at(
     than :data:`CLOCK_SKEW_TOLERANCE` in the future of *now*. Future or
     unparseable values never override lifecycle.
     """
-    candidates: list[datetime] = []
+    candidates: list[tuple[datetime, str]] = []
     lifecycle_dt = _parse_iso_utc(meta.updated_at)
     if lifecycle_dt is not None and _is_usable_activity_time(lifecycle_dt, now=now):
-        candidates.append(lifecycle_dt)
+        candidates.append((lifecycle_dt, "lifecycle"))
 
     if progress is not None:
         for key in ("updated_at", "last_activity_at", "timestamp"):
             dt = _parse_iso_utc(progress.get(key))
             if dt is not None and _is_usable_activity_time(dt, now=now):
-                candidates.append(dt)
+                candidates.append((dt, "progress"))
 
     # File mtimes as last-resort advisory activity signal (same future filter).
     for rel in (
@@ -191,14 +285,26 @@ def _last_activity_at(
             if rel.is_file() and not rel.is_symlink():
                 mtime = datetime.fromtimestamp(rel.stat().st_mtime, tz=UTC)
                 if _is_usable_activity_time(mtime, now=now):
-                    candidates.append(mtime)
+                    if rel.name == RESULT_FILE_NAME:
+                        source = "result"
+                    elif rel.name == "progress.json":
+                        source = "progress"
+                    else:
+                        source = "lifecycle"
+                    candidates.append((mtime, source))
         except OSError:
             continue
 
+    if include_workspace:
+        workspace_dt = workspace_activity_at(clone, now=now)
+        if workspace_dt is not None:
+            candidates.append((workspace_dt, "workspace"))
+
     if candidates:
-        return max(candidates).isoformat()
+        activity, source = max(candidates, key=lambda item: item[0])
+        return activity.isoformat(), source
     # Fallback: lifecycle strings even if unparseable, then created_at.
-    return meta.updated_at or meta.created_at or ""
+    return meta.updated_at or meta.created_at or "", "lifecycle"
 
 
 def _timeout_from_sources(
@@ -285,12 +391,60 @@ def build_clone_summary(
     timeout, remaining = _timeout_and_remaining(
         meta, progress, elapsed, terminal=terminal
     )
+    activity_at, activity_source = _last_activity_at(
+        meta,
+        progress,
+        clone,
+        now=clock,
+        include_workspace=not terminal,
+    )
+    from grok_worker.activity_lease import lease_summary
+
+    lease = lease_summary(clone, now=clock)
+    timeout_mode = "fixed_legacy"
+    hard_timeout: int | None = None
+    hard_remaining: float | None = None
+    lease_revision: int | None = None
+    if lease is not None:
+        timeout_mode = "activity_lease"
+        raw_idle = lease["idle_timeout_seconds"]
+        if isinstance(raw_idle, int) and not isinstance(raw_idle, bool):
+            timeout = raw_idle
+        raw_remaining = lease["lease_remaining_seconds"]
+        remaining = (
+            None
+            if terminal or not isinstance(raw_remaining, (int, float))
+            else float(raw_remaining)
+        )
+        raw_hard = lease["hard_timeout_seconds"]
+        hard_timeout = raw_hard if isinstance(raw_hard, int) else None
+        raw_hard_remaining = lease["hard_remaining_seconds"]
+        hard_remaining = (
+            None
+            if terminal or not isinstance(raw_hard_remaining, (int, float))
+            else float(raw_hard_remaining)
+        )
+        raw_revision = lease["lease_revision"]
+        lease_revision = raw_revision if isinstance(raw_revision, int) else None
+        lease_activity = _parse_iso_utc(lease["lease_last_activity_at"])
+        current_activity = _parse_iso_utc(activity_at)
+        if lease_activity is not None and (
+            current_activity is None or lease_activity > current_activity
+        ):
+            activity_at = lease_activity.isoformat()
+            activity_source = str(lease["lease_activity_source"])
     return {
         "phase": phase,
-        "last_activity_at": _last_activity_at(meta, progress, clone, now=clock),
+        "last_activity_at": activity_at,
+        "activity_source": activity_source,
+        "progress_step": _progress_step(progress),
         "elapsed_seconds": elapsed,
         "timeout_seconds": timeout,
         "remaining_seconds": remaining,
+        "timeout_mode": timeout_mode,
+        "hard_timeout_seconds": hard_timeout,
+        "hard_remaining_seconds": hard_remaining,
+        "lease_revision": lease_revision,
         "result_ready": _result_ready(clone),
         "artifact_ready": _artifact_ready(meta),
         "resources": _resources_for(meta, is_act),
@@ -359,6 +513,12 @@ def collect_status(
                     active=active,
                     phase=str(summary["phase"]),
                     last_activity_at=str(summary["last_activity_at"]),
+                    activity_source=str(summary["activity_source"]),
+                    progress_step=(
+                        str(summary["progress_step"])
+                        if summary["progress_step"] is not None
+                        else None
+                    ),
                     elapsed_seconds=elapsed_val,
                     timeout_seconds=(
                         timeout_val
@@ -370,6 +530,25 @@ def collect_status(
                         remaining_val
                         if isinstance(remaining_val, (int, float))
                         and not isinstance(remaining_val, bool)
+                        else None
+                    ),
+                    timeout_mode=str(summary["timeout_mode"]),
+                    hard_timeout_seconds=(
+                        summary["hard_timeout_seconds"]
+                        if isinstance(summary["hard_timeout_seconds"], int)
+                        and not isinstance(summary["hard_timeout_seconds"], bool)
+                        else None
+                    ),
+                    hard_remaining_seconds=(
+                        float(summary["hard_remaining_seconds"])
+                        if isinstance(summary["hard_remaining_seconds"], (int, float))
+                        and not isinstance(summary["hard_remaining_seconds"], bool)
+                        else None
+                    ),
+                    lease_revision=(
+                        summary["lease_revision"]
+                        if isinstance(summary["lease_revision"], int)
+                        and not isinstance(summary["lease_revision"], bool)
                         else None
                     ),
                     result_ready=bool(summary["result_ready"]),

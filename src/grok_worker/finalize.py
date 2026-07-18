@@ -84,6 +84,8 @@ def _notify_terminal(
         artifact_path=meta.artifact_path,
         shared_cache_root=root,
         timestamp=meta.updated_at or None,
+        run_id=meta.run_id,
+        dispatcher_id=meta.dispatcher_id,
     )
 
 
@@ -207,10 +209,13 @@ def finalize_run(
             clone_path=str(clone),
             artifact_path=str(art) if art else None,
             message=meta.error_message or "local env",
+            run_id=meta.run_id,
+            dispatcher_id=meta.dispatcher_id,
         )
 
     result = None
-    if cfg.mode == "analysis" and acpx_exit == 0 and not result_path(clone).exists():
+    analysis_like = cfg.mode in ("analysis", "research") or cfg.prompt_only
+    if analysis_like and acpx_exit == 0 and not result_path(clone).exists():
         try:
             write_captured_analysis_result(clone, agent_log)
         except (ResultError, OSError, ValueError) as exc:
@@ -224,7 +229,9 @@ def finalize_run(
         meta.error_message = _compose_result_error_message(exc, agent_log)
         result = None  # invalid/unverified result must not count as success
 
-    success = is_task_success(acpx_exit, result, mode=cfg.mode)
+    # Prompt-only / research never synthesizes implementation success.
+    success_mode = "analysis" if analysis_like else cfg.mode
+    success = is_task_success(acpx_exit, result, mode=success_mode)
     try:
         apply_terminal_in_memory(
             meta,
@@ -248,6 +255,8 @@ def finalize_run(
             clone_path=str(clone),
             artifact_path=None,
             message=str(exc),
+            run_id=meta.run_id,
+            dispatcher_id=meta.dispatcher_id,
         )
 
     disk_state = meta.state
@@ -299,6 +308,8 @@ def finalize_run(
             clone_path=str(clone),
             artifact_path=None,
             message=meta.error_message or "artifact failed",
+            run_id=meta.run_id,
+            dispatcher_id=meta.dispatcher_id,
         )
 
     meta.artifact_path = str(art)
@@ -334,4 +345,6 @@ def finalize_run(
         clone_path=clone_out,
         artifact_path=str(art),
         message="ok" if success else (meta.error_message or "task failed"),
+        run_id=meta.run_id,
+        dispatcher_id=meta.dispatcher_id,
     )

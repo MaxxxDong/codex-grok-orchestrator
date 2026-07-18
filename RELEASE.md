@@ -8,6 +8,11 @@
 6. Scan the tracked tree and Git history for credentials, private endpoints, personal paths, runtime state, and generated worker artifacts.
 7. Run a read-only Grok release audit and review every finding; do not let the worker publish its own release.
 8. Confirm README links, license metadata, security reporting, and supported-platform claims.
-9. Tag the verified commit. Create and publish the GitHub release only from that exact commit.
+9. Regression-check: ignored `.env` never copied; bare `--include-dirty` refused
+   for nonignored dirt; OS flock slot leases (max 10 active invocations, crash
+   release, same-source exclusion); event wait 0/30/120 bounds; prompt-only
+   research rejects non-null source; 1800 vs explicit 3600 timeout; health
+   diagnostic-only 300s.
+10. Tag the verified commit. Create and publish the GitHub release only from that exact commit.
 
 Release automation must never mutate a live provider config or publish when verification is incomplete.

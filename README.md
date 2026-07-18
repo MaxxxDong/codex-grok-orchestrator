@@ -1,6 +1,6 @@
 # codex-grok-orchestrator
 
-**[中文](#中文)** · **[English](#english)**
+**[中文](README.zh-CN.md)** · **[English](#english)**
 
 Public repository name: **`codex-grok-orchestrator`**
 Python package and CLI name (unchanged): **`grok-worker`**
@@ -15,9 +15,9 @@ Python package and CLI name (unchanged): **`grok-worker`**
 | **Release notes** | [docs/releases/release-notes.md](docs/releases/release-notes.md) |
 | **License** | Apache-2.0 |
 
-### Latest update — 2026-07-14
+### Latest update — 2026-07-19
 
-Initial public release of **codex-grok-orchestrator**: bilingual README and GitHub Pages landing page, configurable public `grok-worker` engine, and verified three-file handoff artifacts. Dirty-source baseline commits use a command-scoped synthetic Git identity so Linux CI no longer depends on host Git config. Full history: [release notes](docs/releases/release-notes.md).
+`grok-worker` **0.4.2** adds dispatcher-scoped concurrency, managed plugin-free Grok profiles, completion events, diagnostic health checks, activity-renewed leases with runtime adjustment, stricter dirty-source allowlists, and project `.mcp.json` isolation. See the [release notes](docs/releases/release-notes.md) and [Windows/WSL upgrade guide](docs/windows-upgrade.md).
 
 ---
 
@@ -99,7 +99,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install .
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.4.2"
 ```
 
 开发：
@@ -123,7 +123,7 @@ grok-worker run \
   --prompt "检查打包、隐私与发布风险；不要修改文件。"
 ```
 
-实现任务使用 `--mode implementation`。仅当需要把未提交源状态带入隔离基线时，再显式加 `--include-dirty`。
+实现任务使用 `--mode implementation`。仅当需要把已审查的未提交源状态带入隔离基线时，重复传入 `--include-dirty-path PATH`；存在非忽略脏文件时，裸 `--include-dirty` 会被拒绝。
 
 ### 命名会话
 
@@ -152,7 +152,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 ### 安全边界
 
 - 公共核心**允许**显式配置模型与推理强度；不要把私有调度策略说成全局硬锁。
-- 默认关闭嵌套子代理；需显式开启。
+- 稳定 Worker 提示词要求最多使用 3 个不重叠的并发子代理；runner 通过 `--no-subagents` 提供硬关闭，而数量上限由 Grok 遵守提示词策略。
 - 删除与 GC 对源仓库、家目录、制品目录、共享缓存与 disposable 根目录保护。
 - 个人路径、API Key、OAuth、代理/中转、在线 MCP、比赛 Gate 与组织审批链属于**私有叠加层**，不得进入公共核心。
 
@@ -160,6 +160,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
+- [Windows / WSL 0.3 → 0.4.2 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -254,7 +255,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install .
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.4.2"
 ```
 
 Development:
@@ -278,7 +279,7 @@ grok-worker run \
   --prompt "Audit packaging, privacy, and release readiness. Do not edit files."
 ```
 
-Use `--mode implementation` for edits. Add `--include-dirty` only when uncommitted source state must enter the isolated baseline.
+Use `--mode implementation` for edits. Repeat `--include-dirty-path PATH` only for reviewed uncommitted paths that must enter the isolated baseline; bare `--include-dirty` is refused when nonignored dirt exists.
 
 ### Named-session usage
 
@@ -307,7 +308,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 ### Safety boundaries
 
 - The public core **allows** explicit model and reasoning configuration.
-- Nested subagents are off by default; enable only deliberately.
+- The stable Worker prompt asks for at most 3 non-overlapping concurrent subagents. The runner hard-disables subagents with `--no-subagents`; the numeric cap is prompt-enforced by Grok.
 - Deletion and GC protect the source, home, artifact root, shared cache, and disposable root.
 - Personal paths, API keys, OAuth, relays, live MCP, competition gates, and org approval chains belong in **private overlays**, not the public core.
 
@@ -315,6 +316,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
+- [Windows / WSL 0.3 → 0.4.2 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)

@@ -9,3 +9,5 @@
 - 发布说明：[docs/releases/release-notes.md](docs/releases/release-notes.md)
 
 Python 包与 CLI 名称仍为 **`grok-worker`**。公共仓库身份为 **`codex-grok-orchestrator`**。
+
+Worker 的标准外部证据由 `changes.patch`、`worker.log` 和 `verification.txt` 三个文件组成。
