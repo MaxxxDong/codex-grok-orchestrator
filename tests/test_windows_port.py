@@ -18,6 +18,7 @@ from grok_worker.process_identity import process_matches, process_start_token
 from grok_worker.run_config import (
     RunConfig,
     build_acpx_cmd,
+    default_one_shot_backend,
     resolve_acpx_command,
     resolve_executable,
 )
@@ -98,6 +99,16 @@ def test_windows_agent_path_uses_forward_slashes_for_acpx(tmp_path: Path) -> Non
     value = command[command.index("--agent") + 1]
     assert "\\" not in value
     assert value.endswith("/agent.exe")
+
+
+def test_windows_defaults_one_shot_to_managed_acp_with_json_receipts(
+    tmp_path: Path,
+) -> None:
+    cfg = RunConfig(source=tmp_path, prompt="test", model="test-model", acpx_bin="acpx")
+    command = build_acpx_cmd(cfg, tmp_path, "agent", "prompt")
+    assert default_one_shot_backend() == "acp"
+    assert command[command.index("--format") + 1] == "json"
+    assert "--json-strict" in command
 
 
 def test_windows_rmtree_retries_transient_sharing_violation(

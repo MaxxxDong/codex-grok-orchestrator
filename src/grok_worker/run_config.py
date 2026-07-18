@@ -147,7 +147,8 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
             "--model",
             cfg.model,
             "--format",
-            "quiet",
+            "json",
+            "--json-strict",
             "--suppress-reads",
         ]
     )
@@ -159,6 +160,17 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
         cmd.append("--approve-all")
     cmd.extend(["exec", prompt])
     return cmd
+
+
+def default_one_shot_backend() -> str:
+    """Use the proven ACP tool chain by default on native Windows.
+
+    Grok Build 0.2.97 native headless can read and write files on Windows, but
+    its workspace sandbox may reject terminal processes with ``WinError 5``.
+    Keep native headless available explicitly while preserving the reliable
+    managed-ACP default for Windows implementation work.
+    """
+    return "acp" if sys.platform == "win32" else "native"
 
 
 def default_grok_bin() -> str:

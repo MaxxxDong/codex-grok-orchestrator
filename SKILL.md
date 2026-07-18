@@ -8,7 +8,7 @@ description: Use when Codex should delegate bounded repository analysis, impleme
 Codex is always the dispatcher, reviewer, and decision owner. This skill is a foreground worker mechanism, not a daemon, scheduler, autonomous product, or replacement for user approval gates.
 
 Use only the lifecycle entry point `bin/grok-worker`. One-shot `run` defaults to
-native Grok Build headless. Do not invoke raw `grok`, `acpx`, or
+the managed ACP path on Windows and native Grok Build headless elsewhere. Do not invoke raw `grok`, `acpx`, or
 `grok-acp-worker` for repository work outside lifecycle diagnosis.
 
 ## Runtime defaults
@@ -68,8 +68,9 @@ If all configured slots for the current dispatcher are busy, do not preempt or r
 
 Use `run` for one bounded turn.
 
-`run` uses `--backend native` by default. Use `--backend acp` only for
-compatibility diagnosis or a known ACP-dependent integration.
+`run` uses managed `--backend acp` by default on Windows because the current
+native Grok workspace sandbox can reject terminal processes; other platforms
+default to `--backend native`. Either backend may be selected explicitly.
 
 Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous iteration.
 Named sessions remain ACP-backed in v0.5.
@@ -209,7 +210,7 @@ fields, config-apply rollback semantics, and authority boundaries.
 
 Optional one-shot controls:
 
-- `--backend native|acp`: native is the default; ACP requires `acpx`.
+- `--backend native|acp`: Windows defaults to managed ACP; other platforms default to native.
 - `--keep "REASON"`: explicit indefinite clone retention.
 - Safe staged, unstaged, and untracked files are snapshotted automatically.
   Ignored files are never copied. Sensitive paths/content and escaping symlinks

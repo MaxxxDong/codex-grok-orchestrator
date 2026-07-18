@@ -17,7 +17,7 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-19
 
-`grok-worker` **0.5.1** makes native Grok Build headless execution the one-shot default, keeps ACP as an explicit compatibility backend, restores explicit High reasoning in an isolated native `HOME`, and removes common safe-startup blockers. Ordinary dirty files are snapshotted automatically, retained task-ID collisions get a fresh clone, dependency prewarm failures become warnings, and project `.mcp.json` is masked only while Grok runs. Native tool caches now stay writable inside the disposable workspace while prepared environments remain shared. Sensitive files, escaping symlinks, capacity, artifact verification, and cleanup safety remain hard gates. See the [release notes](docs/releases/release-notes.md) and [Windows/WSL upgrade guide](docs/windows-upgrade.md).
+`grok-worker` **0.5.1** adds native Grok Build headless execution while retaining ACP compatibility, restores explicit High reasoning in an isolated native `HOME`, and removes common safe-startup blockers. On Windows, the proven managed-ACP tool chain remains the one-shot default because Grok Build 0.2.97 can reject terminal processes in its native workspace sandbox; `--backend native` remains available explicitly. Ordinary dirty files are snapshotted automatically, retained task-ID collisions get a fresh clone, dependency prewarm failures become warnings, and project `.mcp.json` is masked only while Grok runs. Native tool caches now stay writable inside the disposable workspace while prepared environments remain shared. Sensitive files, escaping symlinks, capacity, artifact verification, and cleanup safety remain hard gates. See the [release notes](docs/releases/release-notes.md) and [Windows native upgrade guide](docs/windows-upgrade.md).
 
 ---
 
@@ -125,7 +125,7 @@ grok-worker run \
   --prompt "检查打包、隐私与发布风险；不要修改文件。"
 ```
 
-`run` 默认使用原生 Headless；需要旧通信层时显式传 `--backend acp`。实现任务使用 `--mode implementation`。普通 staged、unstaged、untracked 文件会经过敏感内容与软链接检查后自动快照；ignored 文件不会复制，疑似密钥与越界软链接仍拒绝启动。旧 `--include-dirty` / `--include-dirty-path` 只作兼容，不再是启动门槛，也不再过滤其他安全脏文件。
+`run` 在 Windows 默认使用已验证的托管 ACP 链路，其他平台默认使用原生 Headless；可显式传 `--backend native` 或 `--backend acp`。实现任务使用 `--mode implementation`。普通 staged、unstaged、untracked 文件会经过敏感内容与软链接检查后自动快照；ignored 文件不会复制，疑似密钥与越界软链接仍拒绝启动。旧 `--include-dirty` / `--include-dirty-path` 只作兼容，不再是启动门槛，也不再过滤其他安全脏文件。
 
 ### 命名会话
 
@@ -283,7 +283,7 @@ grok-worker run \
   --prompt "Audit packaging, privacy, and release readiness. Do not edit files."
 ```
 
-`run` defaults to native headless; use `--backend acp` only for compatibility. Use `--mode implementation` for edits. Ordinary staged, unstaged, and untracked files are automatically snapshotted after sensitive-content and symlink checks. Ignored files are never copied; suspected secrets and escaping symlinks still block startup. Legacy dirty flags remain accepted but no longer filter other safe dirt.
+`run` defaults to the verified managed-ACP chain on Windows and native headless elsewhere; either backend remains explicitly selectable. Use `--mode implementation` for edits. Ordinary staged, unstaged, and untracked files are automatically snapshotted after sensitive-content and symlink checks. Ignored files are never copied; suspected secrets and escaping symlinks still block startup. Legacy dirty flags remain accepted but no longer filter other safe dirt.
 
 ### Named-session usage
 

@@ -43,6 +43,7 @@ from grok_worker.paths import (
     is_managed_clone,
     meta_path,
 )
+from grok_worker.run_config import default_one_shot_backend
 from grok_worker.runner import RunConfig, run_worker
 from grok_worker.settings import default_mcp_config, default_model, default_reasoning_effort
 from grok_worker.status import collect_status, format_status_json, format_status_text
@@ -92,9 +93,9 @@ def cmd_run(
         "Required for cross-root max-10 enforcement; without it only root-scoped limits apply.",
     ),
     backend: str = typer.Option(
-        "native",
+        default_one_shot_backend(),
         "--backend",
-        help="One-shot backend: native (default) or acp compatibility path",
+        help="One-shot backend: ACP by default on Windows; native elsewhere",
     ),
     acpx_bin: str | None = typer.Option(
         None,

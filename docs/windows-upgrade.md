@@ -7,9 +7,9 @@ the only active runtime chain.
 
 ## What changes in 0.5.1
 
-- One-shot `grok-worker run` defaults to native Grok Build headless.
-- `--backend acp` and named sessions remain available through the managed acpx
-  runtime.
+- One-shot `grok-worker run` defaults to the proven managed ACP chain on
+  Windows. Native Grok Build headless remains available with `--backend native`.
+- Named sessions also use the managed acpx runtime.
 - Provider/model/effort-specific profiles preserve explicit High reasoning and
   reject reasoning downgrade warnings.
 - Safe staged, unstaged, and untracked files are snapshotted automatically.
@@ -63,12 +63,12 @@ grok-worker status --source $repo --json
 grok models
 ```
 
-`grok-worker.exe` must resolve under `%USERPROFILE%\.local\bin`. For native
-one-shot work, `acpx` is not required. For `--backend acp` or named sessions,
-the managed runtime status must be healthy; do not switch to WSL or global acpx
-when it is not.
+`grok-worker.exe` must resolve under `%USERPROFILE%\.local\bin`. The Windows
+default ACP path and named sessions require a healthy managed runtime. Explicit
+native one-shot work does not require acpx. Do not switch to WSL or global acpx
+when the managed runtime is unhealthy.
 
-## Native canary
+## Windows canary
 
 Use a small Git repository and a prompt file. A normal dirty text file should be
 snapshotted safely; secret-shaped files and escaping links must still be
@@ -77,10 +77,10 @@ rejected.
 ```powershell
 $env:GROK_WORKER_DISPATCHER_ID = "windows-v051-canary"
 grok-worker run `
-  --backend native `
+  --backend acp `
   --source $repo `
   --mode implementation `
-  --task-id windows-v051-native-canary `
+  --task-id windows-v051-acp-canary `
   --reasoning-effort high `
   --max-workers 24 `
   --prompt-file $promptFile
