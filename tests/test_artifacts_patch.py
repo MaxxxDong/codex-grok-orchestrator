@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import grok_worker.clone as clone_module
 from grok_worker.clone import CloneError, create_workspace
 from grok_worker.patch_capture import PatchError, collect_git_patch
 from tests.conftest import init_git_repo
@@ -91,14 +92,47 @@ def test_nongit_reconstructable_patch(tmp_path: Path) -> None:
     assert text.strip() != ""
 
 
-def test_dirty_source_rejected_by_default(tmp_path: Path) -> None:
+def test_dirty_source_snapshotted_by_default(tmp_path: Path) -> None:
     src = tmp_path / "src"
     init_git_repo(src)
     (src / "dirty.txt").write_text("d\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()
-    with pytest.raises(CloneError, match="dirty"):
-        create_workspace(src, disp, "d01", include_dirty=False)
+    clone, _base, fp, disclosure = create_workspace(
+        src, disp, "d01", include_dirty=False
+    )
+    assert fp is not None
+    assert (clone / "dirty.txt").read_text(encoding="utf-8") == "d\n"
+    assert "auto_safe_dirty_snapshot" in disclosure.reason_codes
+
+
+def test_git_workspace_snapshot_retries_once_and_quarantines_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src-retry"
+    disp = tmp_path / "disp-retry"
+    init_git_repo(src)
+    original = clone_module.create_git_clone
+    monkeypatch.setattr(clone_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    calls = 0
+
+    def flaky_clone(source: Path, dest: Path) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            (dest / "partial").write_text("incomplete\n", encoding="utf-8")
+            raise CloneError("simulated transient clone failure")
+        return original(source, dest)
+
+    monkeypatch.setattr(clone_module, "create_git_clone", flaky_clone)
+    clone, _base, _fp, _disc = create_workspace(src, disp, "retry01")
+
+    assert calls == 2
+    assert (clone / "README.md").is_file()
+    assert not (clone / "partial").exists()
+    quarantines = list(tmp_path.glob("grok-worker-partial-*"))
+    assert len(quarantines) == 1
+    assert (quarantines[0] / "partial").read_text(encoding="utf-8") == "incomplete\n"
 
 
 def test_dirty_source_include_baseline(tmp_path: Path) -> None:
@@ -123,15 +157,17 @@ def test_dirty_source_include_baseline(tmp_path: Path) -> None:
     # (content same as baseline → not in patch)
 
 
-def test_legacy_bare_include_dirty_refuses_nonignored(tmp_path: Path) -> None:
-    """Bare --include-dirty must not materialize all nonignored dirt."""
+def test_legacy_bare_include_dirty_snapshots_safe_nonignored(tmp_path: Path) -> None:
     src = tmp_path / "src"
     init_git_repo(src)
     (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()
-    with pytest.raises(CloneError, match="include-dirty-path|allowlist|legacy"):
-        create_workspace(src, disp, "legacy01", include_dirty=True)
+    clone, _base, _fp, disclosure = create_workspace(
+        src, disp, "legacy01", include_dirty=True
+    )
+    assert (clone / "dirty.txt").read_text(encoding="utf-8") == "dirty-input\n"
+    assert disclosure.risk_decision == "allow"
 
 
 def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
@@ -259,7 +295,7 @@ def json_safe_disc(disc: object) -> str:
     return json.dumps(disc.to_dict())
 
 
-def test_dirty_allowlist_only_listed_paths(tmp_path: Path) -> None:
+def test_legacy_dirty_allowlist_no_longer_filters_safe_paths(tmp_path: Path) -> None:
     src = tmp_path / "src"
     init_git_repo(src)
     (src / "keep.txt").write_text("k\n", encoding="utf-8")
@@ -270,9 +306,83 @@ def test_dirty_allowlist_only_listed_paths(tmp_path: Path) -> None:
         src, disp, "al01", dirty_allowlist=["keep.txt"]
     )
     assert (clone / "keep.txt").read_text(encoding="utf-8") == "k\n"
-    assert not (clone / "skip.txt").exists()
+    assert (clone / "skip.txt").read_text(encoding="utf-8") == "s\n"
     assert "keep.txt" in disc.included_dirty_paths
-    assert "skip.txt" not in disc.included_dirty_paths
+    assert "skip.txt" in disc.included_dirty_paths
+    assert "legacy_allowlist_nonfiltering" in disc.reason_codes
+
+
+def test_materialized_dirty_bytes_are_rescanned_after_source_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src-race"
+    disp = tmp_path / "disp-race"
+    init_git_repo(src)
+    candidate = src / "candidate.txt"
+    candidate.write_text("safe\n", encoding="utf-8")
+    original = clone_module.create_git_clone
+    monkeypatch.setattr(clone_module.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def mutate_after_clone(source: Path, dest: Path) -> str:
+        base = original(source, dest)
+        candidate.write_text("api_key=abcdefghijklmnop123456\n", encoding="utf-8")
+        return base
+
+    monkeypatch.setattr(clone_module, "create_git_clone", mutate_after_clone)
+    with pytest.raises(CloneError, match="sensitive|credential|refused"):
+        create_workspace(src, disp, "race01")
+    assert not (disp / "grok-worker-race01").exists()
+
+
+def test_partial_cleanup_refuses_replaced_destination_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src-owner"
+    disp = tmp_path / "disp-owner"
+    init_git_repo(src)
+    monkeypatch.setattr(clone_module.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def replace_claimed_destination(_source: Path, dest: Path) -> str:
+        dest.rmdir()
+        dest.mkdir()
+        (dest / "external.txt").write_text("do not delete\n", encoding="utf-8")
+        raise CloneError("simulated ownership change")
+
+    monkeypatch.setattr(clone_module, "create_git_clone", replace_claimed_destination)
+    with pytest.raises(CloneError, match="ownership changed"):
+        create_workspace(src, disp, "owner01")
+    replacement = disp / "grok-worker-owner01" / "external.txt"
+    assert replacement.read_text(encoding="utf-8") == "do not delete\n"
+
+
+def test_partial_cleanup_never_deletes_replacement_at_original_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src-cleanup-race"
+    disp = tmp_path / "disp-cleanup-race"
+    init_git_repo(src)
+    destination = disp / "grok-worker-cleanrace"
+
+    def fail_clone(_source: Path, dest: Path) -> str:
+        (dest / "partial").write_text("owned\n", encoding="utf-8")
+        raise CloneError("simulated clone failure")
+
+    monkeypatch.setattr(clone_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    original_rename = clone_module.os.rename
+
+    def replace_original_path(source: Path, quarantine: Path) -> None:
+        original_rename(source, quarantine)
+        if source == destination:
+            destination.mkdir()
+            (destination / "external.txt").write_text(
+                "do not delete\n", encoding="utf-8"
+            )
+
+    monkeypatch.setattr(clone_module, "create_git_clone", fail_clone)
+    monkeypatch.setattr(clone_module.os, "rename", replace_original_path)
+    with pytest.raises(CloneError):
+        create_workspace(src, disp, "cleanrace")
+    assert (destination / "external.txt").read_text(encoding="utf-8") == "do not delete\n"
 
 
 def test_dirty_allowlist_rejects_absolute_and_traversal(tmp_path: Path) -> None:

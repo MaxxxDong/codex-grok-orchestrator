@@ -19,8 +19,9 @@ worker limit and no persistent roots/slot JSON registry. Without an explicit ID,
 only root-scoped limits apply—never claim a cross-root guarantee that cannot be
 enforced. Idle named sessions (`SESSION_OPEN`) do not permanently reserve
 capacity; each ACP turn takes a transient slot. Same-source implementation work
-is exclusive within a dispatcher via a hashed source lock; analysis may share a
-source. Capacity refusals never preempt peers.
+may run concurrently because every worker owns an independent clone; the Root
+dispatcher remains the sole integration owner and must serialize acceptance of
+overlapping changes. Capacity refusals never preempt peers.
 
 ### 3. Evidence before reclamation
 
@@ -42,11 +43,14 @@ Deletion targets must be direct managed children of the configured disposable ro
 
 Mode, agent entry, MCP config, model, reasoning profile, and subagent policy form a permission signature. Named-session follow-ups must match the original immutable contract; drift requires a new session.
 
-The agent process uses a clone-scoped managed Grok home derived from the
-canonical active model profile. Provider credentials are injected only into the child
-environment. User marketplaces, plugins, and Grok-level MCP servers are absent
-by default and verified through `grok inspect`; explicit ACP MCP configuration
-remains a separate, observable task input.
+The agent process uses a managed native-layout Grok home keyed by source-profile
+identity, provider/model configuration, and reasoning effort. Only identical
+profiles share a home; different providers or efforts cannot overwrite one
+another. Provider credentials are injected only into the child environment.
+User marketplaces, plugins, and Grok-level MCP servers are absent by default and
+verified through `grok inspect`; explicit ACP MCP configuration remains a
+separate, observable task input. Native analysis additionally uses Grok's OS
+`read-only` sandbox and `plan` permission mode.
 
 ### 6. Shared caches need leases
 

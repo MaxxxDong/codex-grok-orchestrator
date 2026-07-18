@@ -1,4 +1,4 @@
-"""Execute acpx under worker lock and drive finalization."""
+"""Execute a native or ACP worker under lock and drive finalization."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from grok_worker.activity_lease import (
+    LeasedProcessResult,
     LeaseError,
     read_lease,
     run_with_activity_lease,
@@ -18,19 +19,34 @@ from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
 from grok_worker.gc import gc_disposable_root
-from grok_worker.grok_profile import scoped_worker_grok_home
+from grok_worker.grok_profile import (
+    GrokProfileError,
+    isolated_child_environment,
+    prepare_isolated_profile,
+    validate_isolated_profile,
+)
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text, read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState
 from grok_worker.paths import meta_dir, meta_path
 from grok_worker.process_identity import capture_identity, process_start_token
+from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.prompt_cache import OneShotModeError, build_one_shot_prompt
-from grok_worker.run_config import RunConfig, RunOutcome, build_acpx_cmd
+from grok_worker.run_config import (
+    RunConfig,
+    RunOutcome,
+    build_acpx_cmd,
+    build_native_cmd,
+    default_grok_bin,
+)
 from grok_worker.settings import agent_policy_environment
 
 
 class Interrupt(Exception):
     """Raised when SIGINT/SIGTERM arrives during the worker run."""
+
+
+_REASONING_DOWNGRADE_WARNING = "model does not support reasoning effort; ignoring"
 
 
 def execute_worker(
@@ -62,31 +78,12 @@ def execute_worker(
         wlock.acquire()
         cache_lease.acquire()
         dep_env = shared_cache_environment(shared)
+        startup_warnings: list[str] = []
         if cfg.prepare_deps:
             try:
                 dep_env.update(prepare_shared_env(clone, shared))
             except DepsError as exc:
-                mark_failed(
-                    meta,
-                    clone,
-                    retain_hours=cfg.failure_retain_hours,
-                    message=f"deps prepare failed: {exc}",
-                    shared_cache_root=shared,
-                )
-                art = try_collect(clone, meta, artifacts, disposable, None)
-                if art:
-                    meta.artifact_path = str(art)
-                    meta.write(meta_path(clone))
-                return RunOutcome(
-                    task_id=task_id,
-                    state=str(meta.state),
-                    exit_code=1,
-                    clone_path=str(clone),
-                    artifact_path=str(art) if art else None,
-                    message=meta.error_message or "deps failed",
-                    run_id=meta.run_id,
-                    dispatcher_id=meta.dispatcher_id,
-                )
+                startup_warnings.append(f"dependency prewarm skipped: {exc}")
         oneshot_mode = "research" if cfg.prompt_only else cfg.mode
         try:
             prompt = build_one_shot_prompt(None, oneshot_mode, cfg.prompt)
@@ -137,10 +134,12 @@ def execute_worker(
         )
         env["GROK_WORKER_LIFECYCLE"] = "1"
         env["GROK_WORKER_TASK_ID"] = task_id
-        env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, env))
-        cmd = build_acpx_cmd(cfg, clone, agent, prompt)
+        env["GROK_WORKER_RUNTIME_HOME"] = str(shared / "grok-runtime-home")
 
-        agent_log.write_bytes(b"")
+        warning_text = "".join(f"[grok-worker] warning: {item}\n" for item in startup_warnings)
+        agent_log.write_text(warning_text, encoding="utf-8")
+        prompt_file = meta_dir(clone) / "prompt-one-shot.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
 
         def _record_child(process: subprocess.Popen[Any]) -> None:
             nonlocal child_proc
@@ -149,24 +148,61 @@ def execute_worker(
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))
 
-        process_result = run_with_activity_lease(
-            cmd,
-            clone=clone,
-            log=agent_log,
-            env=env,
-            idle_timeout_seconds=cfg.timeout,
-            hard_timeout_seconds=cfg.hard_timeout,
-            on_start=_record_child,
-        )
-        acpx_exit = process_result.exit_code
+        with isolate_project_mcp(clone, meta_dir(clone)) as project_mcp_masked:
+            if project_mcp_masked:
+                startup_warnings.append("repository .mcp.json masked during Grok startup")
+            try:
+                if cfg.backend == "native":
+                    profile = prepare_isolated_profile(
+                        model_id=cfg.model,
+                        reasoning_effort=cfg.reasoning_effort,
+                        environ=env,
+                    )
+                    child_env = isolated_child_environment(env, profile)
+                    grok_bin = default_grok_bin()
+                    validate_isolated_profile(
+                        grok_bin=grok_bin,
+                        profile=profile,
+                        environ=child_env,
+                        cwd=clone,
+                        allow_extensions=False,
+                    )
+                    cmd = build_native_cmd(cfg, clone, prompt_file)
+                else:
+                    child_env = env
+                    cmd = build_acpx_cmd(cfg, clone, agent, prompt)
+                process_result = run_with_activity_lease(
+                    cmd,
+                    clone=clone,
+                    log=agent_log,
+                    env=child_env,
+                    idle_timeout_seconds=cfg.timeout,
+                    hard_timeout_seconds=cfg.hard_timeout,
+                    on_start=_record_child,
+                )
+            except (GrokProfileError, FileNotFoundError, OSError, ValueError) as exc:
+                with agent_log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"[grok-worker] startup failed: {exc}\n")
+                process_result = LeasedProcessResult(127)
+        worker_exit = process_result.exit_code
         child_proc = None
-        meta.acpx_exit_code = acpx_exit
+        meta.acpx_exit_code = worker_exit
         if process_result.timeout_message:
             meta.error_message = process_result.timeout_message
         try:
             log_text = agent_log.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             log_text = ""
+        if (
+            cfg.backend == "native"
+            and cfg.reasoning_effort
+            and _REASONING_DOWNGRADE_WARNING in log_text
+        ):
+            worker_exit = 78
+            meta.acpx_exit_code = worker_exit
+            meta.error_message = (
+                f"native Grok ignored requested reasoning effort {cfg.reasoning_effort!r}"
+            )
         metrics_path = shared / "metrics" / "worker-runs.jsonl"
         append_metric(
             metrics_path,
@@ -174,12 +210,16 @@ def execute_worker(
                 "task_id": task_id,
                 "mode": cfg.mode,
                 "run_kind": "one-shot",
-                "acpx_exit_code": acpx_exit,
+                "backend": cfg.backend,
+                "process_exit_code": worker_exit,
+                "acpx_exit_code": worker_exit if cfg.backend == "acp" else None,
             },
             extract_token_metrics_from_text(log_text),
         )
         audit: dict[str, object] = {
             "metrics": read_task_metrics(metrics_path, task_id),
+            "backend": cfg.backend,
+            "startup_warnings": startup_warnings,
         }
         try:
             audit["activity_lease"] = read_lease(clone).to_dict()
@@ -193,7 +233,7 @@ def execute_worker(
             artifacts,
             protected,
             agent_log,
-            acpx_exit,
+            worker_exit,
             audit,
         )
     except Interrupt as exc:

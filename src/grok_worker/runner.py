@@ -13,6 +13,7 @@ from grok_worker.capacity import (
 )
 from grok_worker.clone import (
     CloneError,
+    clone_path_for,
     create_prompt_only_workspace,
     create_workspace,
     make_task_id,
@@ -93,7 +94,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
         raise CloneError(str(exc)) from exc
 
     run_id = cfg.run_id or make_run_id()
-    agent = cfg.agent_bin or default_agent_bin()
+    agent = (cfg.agent_bin or default_agent_bin()) if cfg.backend == "acp" else ""
     clone: Path | None = None
     meta: WorkerMeta | None = None
     mode = "analysis" if cfg.prompt_only else cfg.mode
@@ -114,15 +115,26 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                     shared,
                     cfg.dispatcher_id,
                     mode=mode,
-                    source_realpath=(
-                        source_realpath if mode == "implementation" else None
-                    ),
+                    # Workers edit independent disposable clones. Integration
+                    # remains Root-owned, so same-source startup exclusion only
+                    # serialized safe work and reduced throughput.
+                    source_realpath=None,
                     limit=cfg.max_workers,
                 )
             else:
                 # Backward compatible: root-scoped only (no silent cross-root claim).
                 enforce_concurrency(disposable, cfg.max_workers)
             enforce_cap(disposable, cfg.cap_bytes)
+
+            # A retained failed clone must not prevent a deliberate retry. Keep
+            # the old evidence and allocate a fresh, returned task id.
+            requested_task_id = task_id
+            while clone_path_for(disposable, task_id).exists() or clone_path_for(
+                disposable, task_id
+            ).is_symlink():
+                stem = requested_task_id[:55].rstrip("._-") or "task"
+                task_id = f"{stem}-{make_task_id()[:6]}"
+                validate_task_id(task_id)
 
             if cfg.prompt_only:
                 clone, base, src_fp, disclosure = create_prompt_only_workspace(
@@ -162,6 +174,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 run_id=run_id,
                 dispatcher_id=cfg.dispatcher_id,
                 mode=mode,
+                backend=cfg.backend,
                 disclosure_summary=disc_dict,
             )
             meta.write(meta_path(clone))

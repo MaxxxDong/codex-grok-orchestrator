@@ -7,6 +7,118 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-19 — Native headless and lower-friction startup / 原生执行与启动提效
+
+**Version:** `grok-worker` 0.5.0
+
+**Upgrade from:** 0.3.x / 0.4.x
+
+**Public identity:** `MaxxxDong/codex-grok-orchestrator`
+
+### English
+
+One-shot `run` now uses Grok Build's native headless CLI by default. The ACP
+transport remains available through `--backend acp`, and named sessions remain
+ACP-backed for compatibility.
+
+**Reasoning and isolation**
+
+- Workers use a private runtime `HOME` with the native `~/.grok` layout instead
+  of `GROK_HOME` override mode.
+- Runtime homes are shared only by identical source/provider/model/effort
+  profiles; the same model ID on another endpoint receives a different home.
+- The managed model explicitly declares reasoning support and High effort. A
+  Grok warning that effort was ignored invalidates the run.
+- API keys remain child-environment-only. `Agents.md` stays linked; user plugins
+  and MCP servers are disabled.
+- Repository `.mcp.json` is atomically masked only inside the disposable clone
+  during execution, hidden from Git, and restored byte-for-byte before
+  patch/artifact capture. Interrupted masks self-recover on the next launch.
+
+**Lower-friction startup**
+
+- Safe staged, unstaged, and untracked files are snapshotted automatically.
+  Ignored files are excluded; suspected secrets and escaping symlinks remain
+  hard failures. Legacy dirty allowlists no longer omit other safe dirt.
+- Retained task-ID collisions allocate a fresh suffixed task and clone.
+- A transient Git clone/baseline failure gets one clean rescan and retry;
+  half-created task destinations are moved to age-gated temporary quarantine.
+- Dependency prewarm failure is recorded as a warning and execution continues;
+  verified task output is still mandatory.
+- Independent implementation workers may start in separate clones. Root remains
+  the sole integration owner.
+
+**Observability and evidence**
+
+- Health output adds `backend`, `process_pid`, and `process_live`; old `acpx_*`
+  names remain for v0.3/v0.4 readers.
+- Native JSON usage records input, cache-read, output, and reasoning tokens when
+  available. Cache hits remain provider-dependent and are never inferred.
+- The external success contract is unchanged: exactly `changes.patch`,
+  `worker.log`, and `verification.txt`.
+
+**Measured live comparison**
+
+On the same bounded Python implementation task through the same configured
+provider, native headless completed in about 69 seconds with 22 passing tests;
+ACP completed in about 110 seconds with 18 passing tests. Both stored High
+reasoning. This is one controlled sample, not a universal benchmark.
+
+A final post-audit release smoke on the same three-test repository completed in
+34.31 seconds through native and 59.86 seconds through ACP. Both produced the
+same minimal implementation and passed 3/3 tests. Native exposed 74,294 input,
+1,719 output, and 252 reasoning tokens; ACP quiet output did not expose token usage.
+Three repeated native runs reported zero cache-read tokens, so this release does
+not claim a cache hit for that relay/task combination.
+
+### 中文
+
+一次性 `run` 现在默认直接使用 Grok Build 原生 Headless CLI。旧 ACP 通信层
+通过 `--backend acp` 保留，命名会话在 0.5.0 仍由 ACP 承载。
+
+**思考强度与隔离**
+
+- Worker 使用独立 runtime `HOME` 下的原生 `~/.grok`，不再进入会破坏
+  reasoning/cache 行为的 `GROK_HOME` override 模式。
+- 只有 source/provider/model/effort 完全一致才共享 runtime home；同模型不同
+  端点不会互相覆盖配置。
+- 托管模型显式声明 High 能力；只要 Grok 报告忽略思考强度，本次运行就判失败并保留。
+- API Key 只进入子进程环境；继续链接 `Agents.md`，禁用用户 plugin/MCP。
+- 仓库 `.mcp.json` 只在 disposable clone 的 Grok 执行期间原子隐藏，Git 不会
+  看到临时删除；中断后下次启动会自恢复，原文件按字节优先保留。
+
+**减少启动阻断**
+
+- 普通 staged、unstaged、untracked 文件自动安全快照；ignored 文件不复制，
+  疑似密钥和越界软链接仍硬拒绝；旧 allowlist 不再漏掉其他安全脏文件。
+- 已保留的同 task-id 不再阻断，新任务自动得到后缀和独立 clone。
+- Git clone/脏基线若遇到瞬时失败，会重新扫描后干净重试一次；半成品原子移出
+  task 命名空间，进入有 24 小时年龄门的临时隔离区。
+- 依赖预热失败记录为 warning 后继续；最终仍必须通过真实验证。
+- 独立实现任务可在各自 clone 启动，Root 继续作为唯一集成者。
+
+**可观测性与证据**
+
+- health 新增 `backend`、`process_pid`、`process_live`，旧 `acpx_*` 字段保留兼容。
+- 原生 JSON 可见时记录 input/cache-read/output/reasoning token；缓存命中仍由
+  服务商决定，不做推断。
+- 外部成功制品保持严格三文件：`changes.patch`、`worker.log`、`verification.txt`。
+
+**真实对照样例**
+
+同一服务商、同一有边界的 Python 实现题中，原生 Headless 约 69 秒并通过
+22 个测试；ACP 约 110 秒并通过 18 个测试。两者均保存 High 思考。这是一组
+受控样例，不代表所有任务的固定倍率。
+
+最终审计后 smoke 在同一个三测试仓库中，Native 为 34.31 秒，ACP 为 59.86 秒；
+两者产出相同的最小实现并通过 3/3 测试。Native 可观测到 74,294 input、1,719
+output、252 reasoning tokens；ACP quiet 输出不暴露 token。相同 Native 请求连续
+三次均为 0 cache-read，因此本版本不宣称该渠道/任务已经命中缓存。
+
+Windows 请按 [0.3/0.4 → 0.5.0 WSL2 升级指南](../windows-upgrade.md)执行。
+
+---
+
 ## 2026-07-19 — Lifecycle, isolation, and observability / 生命周期、隔离与可观测性
 
 **Version:** `grok-worker` 0.4.2

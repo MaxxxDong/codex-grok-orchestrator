@@ -127,10 +127,10 @@ acquire and release a **transient** dispatcher slot around their actual ACP
 invocation. Idle `SESSION_OPEN` does **not** permanently consume the budget.
 Root-scoped active counts also exclude `SESSION_OPEN`.
 
-Same-source policy: implementation mode additionally acquires a nonblocking
-source exclusion lock under the same dispatcher hash, keyed by the canonical
-source hash (never a raw path in lock filenames or errors). Analysis does not
-take the source lock. A different dispatcher must not block.
+Same-source policy: independent workers may start concurrently because each one
+edits a standalone clone. Root remains the sole integration owner and must
+review/serialize acceptance when changes overlap. A different dispatcher never
+blocks merely because it uses the same source path.
 
 There is **no** persistent `roots.json` registry or advisory slot-pointer JSON;
 the only reservation primitive is the held OS flock.
@@ -149,8 +149,9 @@ CPU/RSS when available. It does **not** terminate, interrupt, restart, or mutate
 running worker merely because the interval elapsed. The foreground runner owns
 termination: it reads `.grok-worker/lease.json`, renews the inactivity deadline
 from managed Grok session events, progress/result writes, agent-log growth, and
-bounded workspace activity, and terminates the ACP process tree only when the
-idle lease or hard cap expires. `acpx` receives no fixed `--timeout`, so the
+bounded workspace activity, and terminates the backend process tree only when the
+idle lease or hard cap expires. Neither backend receives a fixed transport-level
+timeout, so the
 policy may be changed during execution:
 
 ```bash
@@ -165,10 +166,17 @@ lifecycle remains the authority for worker state and terminal outcome.
 
 - Untracked discovery and fingerprint paths always use `--exclude-standard`;
   ignored files such as `.env` are never copied into the clone baseline.
-- Prefer repeatable `--include-dirty-path PATH` allowlists (repository-relative
-  only). Legacy bare `--include-dirty` is **refused** when nonignored dirty
-  material exists (actionable migration to the allowlist). Ignored-only material
-  remains excluded and is never copied.
+- Safe staged, unstaged, and untracked material is included automatically after
+  disclosure scanning. Legacy `--include-dirty` and `--include-dirty-path` are
+  accepted for script compatibility but are no longer ordinary startup gates or
+  filters; all safe nonignored dirt is included.
+- The exact materialized clone bytes are scanned again after copying, closing
+  the source scan/copy race. A sensitive post-scan rewrite is refused before the
+  backend starts.
+- A transient Git clone or dirty-baseline failure is cleaned and retried once
+  after a fresh disclosure scan. Partial directories are atomically moved out of
+  the task namespace and become eligible for the existing 24-hour system-temp
+  GC; startup does not recursively delete a just-failed clone path.
 - Absolute paths, `..`, NUL, `.git`/managed paths, ignored paths, and file or
   directory symlink escapes are rejected. Renames may require both old and new
   paths. Already-deleted tracked paths are allowed (deletion is safe) and are
@@ -190,6 +198,33 @@ lifecycle remains the authority for worker state and terminal outcome.
   and never synthesizes implementation success. Implementation mode, dirty
   flags, and a non-null `source` are rejected (CLI and library/API path).
 
+## 1e. Backend and startup recovery
+
+- `grok-worker run` defaults to `--backend native`, which directly invokes Grok
+  Build headless with a prompt file and JSON output.
+- `--backend acp` retains the previous transport. Named sessions remain ACP-only
+  in 0.5.0.
+- The isolated profile uses a stable source/config/effort-keyed runtime `HOME`
+  and native `~/.grok`; it never sets `GROK_HOME` for the child. Different
+  providers or efforts cannot overwrite one another. Plugins/MCP are empty
+  after `grok inspect --json`, credentials remain in the child environment, and
+  High reasoning support is explicit.
+- Native `analysis` and `research` use Grok's OS `read-only` sandbox plus `plan`
+  permission mode. Implementation alone receives workspace write approval.
+- The selected worker model is also used for session summaries, preventing the
+  built-in `grok-build` auxiliary model from reaching an incompatible relay.
+- A warning that Grok ignored requested reasoning effort changes the backend
+  outcome to failure even if the worker wrote a completed result.
+- Repository `.mcp.json` is renamed to a private same-filesystem backup inside
+  `.grok-worker` only while the backend runs. A worker-owned `skip-worktree`
+  flag hides that temporary move from Git. Original bytes always win on restore;
+  a same-name worker replacement is quarantined under managed metadata. Tracked
+  symlinks are masked too, and interrupted pre-move flags self-recover.
+- Dependency prewarm errors become `startup_warnings`; they do not prevent the
+  backend from trying task-local verification.
+- If an explicit task ID already belongs to a retained clone, the runner keeps
+  that evidence and allocates a suffixed ID. It never overwrites the old clone.
+
 ## 2. Status summary
 
 ### Per-clone fields (`status --json`)
@@ -210,6 +245,9 @@ Each managed clone entry includes:
 | `lease_revision` | Increments when an operator changes policy with `lease-set` |
 | `result_ready` | True only if clone has a real `.grok-output/result.json` file |
 | `artifact_ready` | True only when metadata marks complete **and** artifact path exists |
+| `backend` | `native` or `acp` for v0.5 runs |
+| `process_pid` / `process_live` | Generic backend process identity; preferred for new consumers |
+| `acpx_pid` / `acpx_live` | Compatibility aliases retained for v0.3/v0.4 consumers |
 | `resources.cpu_percent` / `resources.rss_bytes` | Best-effort via short-timeout `ps` on preferred PID `acpx_pid` → `runner_pid` → legacy `pid`; null when inactive/unsupported |
 
 ### Fail-soft progress
@@ -301,5 +339,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The initial standalone public release is `0.3.0`. Lifecycle and artifact formats
-remain versioned independently so future CLI releases can preserve compatibility.
+The current public release is `0.5.0`. Lifecycle and artifact formats remain
+versioned independently so native and ACP backends preserve older evidence and
+status readers.

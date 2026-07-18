@@ -90,6 +90,11 @@ def cmd_run(
         help="Per-dispatcher concurrency scope (also GROK_WORKER_DISPATCHER_ID). "
         "Required for cross-root max-10 enforcement; without it only root-scoped limits apply.",
     ),
+    backend: str = typer.Option(
+        "native",
+        "--backend",
+        help="One-shot backend: native (default) or acp compatibility path",
+    ),
     acpx_bin: str = typer.Option("acpx", "--acpx-bin"),
     agent_bin: str | None = typer.Option(None, "--agent-bin"),
     mcp_config: str | None = typer.Option(None, "--mcp-config"),
@@ -104,8 +109,7 @@ def cmd_run(
     include_dirty: bool = typer.Option(
         False,
         "--include-dirty",
-        help="Deprecated: refused when nonignored dirty material exists. "
-        "Use repeatable --include-dirty-path PATH. Ignored files are never copied.",
+        help="Deprecated compatibility flag; safe dirty files are snapshotted automatically",
     ),
     include_dirty_path: list[str] | None = typer.Option(
         None,
@@ -121,7 +125,10 @@ def cmd_run(
     cache_max_bytes: int = typer.Option(DEFAULT_CACHE_MAX_BYTES, "--cache-max-bytes"),
     cache_ttl_hours: float = typer.Option(DEFAULT_CACHE_TTL_HOURS, "--cache-ttl-hours"),
 ) -> None:
-    """Create clone, run acpx, collect artifacts, finalize."""
+    """Create a disposable clone, run Grok, collect artifacts, and finalize."""
+    if backend not in {"native", "acp"}:
+        typer.echo("backend must be native or acp", err=True)
+        raise typer.Exit(2)
     if prompt_only:
         if mode == "implementation":
             typer.echo("prompt-only rejects implementation mode", err=True)
@@ -186,6 +193,7 @@ def cmd_run(
         include_dirty=include_dirty,
         include_dirty_paths=list(include_dirty_path or []),
         prompt_only=prompt_only,
+        backend=backend,
         cache_max_bytes=cache_max_bytes,
         cache_ttl_hours=cache_ttl_hours,
     )
@@ -231,7 +239,7 @@ def cmd_lease_set(
         help="New absolute cap in seconds; 0 disables it",
     ),
 ) -> None:
-    """Adjust a running worker lease without restarting its ACP session."""
+    """Adjust a running worker lease without restarting its backend process."""
     if idle_timeout is None and hard_timeout is None:
         typer.echo("lease-set requires --idle-timeout and/or --hard-timeout", err=True)
         raise typer.Exit(2)

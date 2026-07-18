@@ -161,7 +161,7 @@ def test_frozen_failure_no_retry(tmp_path: Path) -> None:
                 prepare_shared_env(source, shared)
 
 
-def test_deps_hard_failure_prevents_acpx(
+def test_deps_prewarm_failure_warns_and_still_invokes_backend(
     git_source: Path, tmp_roots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import subprocess
@@ -192,9 +192,14 @@ def test_deps_hard_failure_prevents_acpx(
                 skip_post_gc=True,
             )
         )
-    assert not invoked_marker.exists()
+    assert invoked_marker.exists()
     assert outcome.state == "failed"
-    assert "deps prepare failed" in (outcome.message or "")
+    assert "deps prepare failed" not in (outcome.message or "")
+    assert outcome.artifact_path is not None
+    worker_log = Path(outcome.artifact_path, "worker.log").read_text(
+        encoding="utf-8"
+    )
+    assert "dependency prewarm skipped" in worker_log
 
 
 def test_no_local_env_detection(tmp_path: Path) -> None:

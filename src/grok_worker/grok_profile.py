@@ -31,6 +31,7 @@ class GrokProfileError(RuntimeError):
 @dataclass(frozen=True)
 class PreparedGrokProfile:
     home: Path
+    runtime_home: Path
     source_home: Path
     environment: dict[str, str]
 
@@ -45,27 +46,43 @@ def source_grok_home(environ: Mapping[str, str] = os.environ) -> Path:
     return (Path.home() / ".grok").resolve()
 
 
-def worker_grok_home(environ: Mapping[str, str] = os.environ) -> Path:
-    explicit = environ.get("GROK_WORKER_GROK_HOME", "").strip()
+def worker_runtime_home(environ: Mapping[str, str] = os.environ) -> Path:
+    explicit = environ.get("GROK_WORKER_RUNTIME_HOME", "").strip()
     if explicit:
         return Path(explicit).expanduser().resolve()
+    legacy = environ.get("GROK_WORKER_GROK_HOME", "").strip()
+    if legacy:
+        # v0.4 accepted a direct Grok home. Treat it as a managed runtime root
+        # so Grok still sees its profile at the native ~/.grok location.
+        return Path(legacy).expanduser().resolve()
     if sys.platform == "darwin":
         return (
-            Path.home() / "Library" / "Application Support" / "grok-worker" / "grok-home"
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "grok-worker"
+            / "runtime-home"
         ).resolve()
     data_home = environ.get("XDG_DATA_HOME", "").strip()
     base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
-    return (base / "grok-worker" / "grok-home").resolve()
+    return (base / "grok-worker" / "runtime-home").resolve()
+
+
+def worker_grok_home(environ: Mapping[str, str] = os.environ) -> Path:
+    return worker_runtime_home(environ) / ".grok"
 
 
 def scoped_worker_grok_home(
     scope: Path | str,
     environ: Mapping[str, str] = os.environ,
 ) -> Path:
-    """Return one stable managed home for a worker clone or named session."""
-    identity = str(Path(scope).expanduser().resolve()).encode("utf-8")
-    digest = hashlib.sha256(identity).hexdigest()[:24]
-    return worker_grok_home(environ) / "workers" / digest
+    """Compatibility alias for the stable shared worker profile.
+
+    Per-clone homes changed Grok Build's native prompt prefix and defeated
+    provider cache reuse. The scope is intentionally ignored in v0.5.
+    """
+    Path(scope).expanduser().resolve()
+    return worker_grok_home(environ)
 
 
 def _toml_key(value: str) -> str:
@@ -137,17 +154,25 @@ def _derived_config(
         for key, value in raw_model.items()
         if key not in {"api_key", "env_key"}
     }
+    # A credential-free isolated home cannot refresh Grok's official catalog.
+    # Declare the requested capability on the custom profile so Build does not
+    # silently discard --reasoning-effort even though the upstream model accepts it.
+    model_values["reasoning_effort"] = reasoning_effort
+    model_values["supports_reasoning_effort"] = True
     model_values["env_key"] = WORKER_API_KEY_ENV
     sections = [
         _table_lines("cli", {"auto_update": False}),
-        # Marks Claude import as already handled so Grok does not discover a
-        # repository-root .mcp.json (source.type = "mcpJson") into the worker.
-        # Fail-closed validate_isolated_profile() still enforces empty MCP/plugins.
-        _table_lines("claude_compat", {"imported": True}),
+        _table_lines("compat.claude", {"mcps": False}),
+        _table_lines("compat.cursor", {"mcps": False}),
+        _table_lines("plugins", {"enabled": [], "disabled": ["*"]}),
         _table_lines("ui", {"fork_secondary_model": model_id}),
         _table_lines(
             "models",
-            {"default": model_id, "default_reasoning_effort": reasoning_effort},
+            {
+                "default": model_id,
+                "session_summary": model_id,
+                "default_reasoning_effort": reasoning_effort,
+            },
         ),
         _table_lines(f"model.{_toml_key(model_id)}", model_values),
     ]
@@ -216,6 +241,33 @@ def _sync_agents(source_home: Path, profile_home: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _sync_model_cache(source_home: Path, profile_home: Path) -> None:
+    """Copy model capability metadata without copying auth or session state."""
+    source = source_home / "models_cache.json"
+    destination = profile_home / "models_cache.json"
+    if not source.is_file() or source.is_symlink():
+        destination.unlink(missing_ok=True)
+        return
+    try:
+        text = source.read_text(encoding="utf-8")
+        payload = json.loads(text)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GrokProfileError(f"cannot read source Grok model cache: {exc}") from exc
+    if not isinstance(payload, (dict, list)):
+        raise GrokProfileError("source Grok model cache has an invalid payload")
+    _atomic_write(destination, text, 0o600)
+
+
+def isolated_child_environment(
+    environ: Mapping[str, str], profile: PreparedGrokProfile
+) -> dict[str, str]:
+    """Apply the isolated native-home environment without GROK_HOME override mode."""
+    child = dict(environ)
+    child.pop("GROK_HOME", None)
+    child.update(profile.environment)
+    return child
+
+
 def prepare_isolated_profile(
     *,
     model_id: str,
@@ -223,9 +275,7 @@ def prepare_isolated_profile(
     environ: Mapping[str, str] = os.environ,
 ) -> PreparedGrokProfile:
     source_home = source_grok_home(environ)
-    profile_home = worker_grok_home(environ)
-    if source_home == profile_home:
-        raise GrokProfileError("worker Grok home must differ from the source Grok home")
+    runtime_root = worker_runtime_home(environ)
     config_path = source_home / "config.toml"
     try:
         with config_path.open("rb") as stream:
@@ -235,18 +285,32 @@ def prepare_isolated_profile(
     config_text, raw_model = _derived_config(
         source, model_id=model_id, reasoning_effort=reasoning_effort
     )
+    # Model ID alone is unsafe when profiles route it to different providers.
+    # Keep reuse for identical source/config/effort tuples only.
+    profile_identity = f"{source_home}\0{config_text}".encode()
+    profile_key = hashlib.sha256(profile_identity).hexdigest()[:16]
+    runtime_home = runtime_root / "profiles" / profile_key
+    profile_home = runtime_home / ".grok"
+    if source_home == profile_home:
+        raise GrokProfileError("worker Grok home must differ from the source Grok home")
     key = _credential(raw_model, environ)
+    _ensure_private_home(runtime_home)
     _ensure_private_home(profile_home)
     with _profile_lock(profile_home):
         _claim_managed_home(profile_home)
         _atomic_write(profile_home / "config.toml", config_text, 0o600)
         _sync_agents(source_home, profile_home)
+        _sync_model_cache(source_home, profile_home)
     child_environment = {
-        "GROK_HOME": str(profile_home),
+        # Grok Build 0.2.103 loses explicit reasoning effort and provider cache
+        # behavior when launched in non-native GROK_HOME override mode. Give it
+        # an isolated HOME with a normal ~/.grok instead.
+        "HOME": str(runtime_home),
+        "GROK_WORKER_RUNTIME_HOME": str(runtime_home),
         "GROK_WORKER_SOURCE_GROK_HOME": str(source_home),
         WORKER_API_KEY_ENV: key,
     }
-    return PreparedGrokProfile(profile_home, source_home, child_environment)
+    return PreparedGrokProfile(profile_home, runtime_home, source_home, child_environment)
 
 
 def validate_isolated_profile(
@@ -257,8 +321,7 @@ def validate_isolated_profile(
     cwd: Path,
     allow_extensions: bool = False,
 ) -> None:
-    child_env = dict(environ)
-    child_env.update(profile.environment)
+    child_env = isolated_child_environment(environ, profile)
     try:
         completed = subprocess.run(
             [grok_bin, "inspect", "--json"],

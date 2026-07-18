@@ -110,6 +110,8 @@ class WorkerMeta:
     dispatcher_id: str | None = None
     # analysis | implementation | prompt-only research marker
     mode: str | None = None
+    # native (Grok Build headless) or acp (acpx compatibility backend)
+    backend: str | None = None
     # Structured disclosure summary (values/content/prompt/env-free). Survives
     # successful clone deletion because lifecycle is copied into worker.log.
     disclosure_summary: dict[str, Any] | None = None
@@ -155,6 +157,7 @@ class WorkerMeta:
             run_id=_optional_str(data.get("run_id")),
             dispatcher_id=_optional_str(data.get("dispatcher_id")),
             mode=_optional_str(data.get("mode")),
+            backend=_optional_str(data.get("backend")),
             disclosure_summary=_optional_disclosure(data.get("disclosure_summary")),
         )
 

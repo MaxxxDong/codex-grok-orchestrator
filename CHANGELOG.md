@@ -2,6 +2,51 @@
 
 All notable public changes are recorded here. The project follows semantic versioning while the CLI is pre-1.0.
 
+## [0.5.0] - 2026-07-19
+
+### Added
+
+- Native Grok Build headless execution for one-shot `run`; select the legacy
+  transport explicitly with `--backend acp`.
+- Stable isolated runtime `HOME` profiles with native `~/.grok` layout, explicit
+  reasoning capability, plugin/MCP isolation, and cache-preserving reuse only
+  for identical source/provider/model/effort profiles.
+- Generic `backend`, `process_pid`, and `process_live` health fields while
+  retaining v0.3/v0.4 `acpx_*` compatibility fields.
+- Native token, cache-read, output, and reasoning metric extraction.
+
+### Changed
+
+- Safe staged, unstaged, and untracked files are snapshotted automatically;
+  legacy allowlists no longer filter them, ignored files are excluded, exact
+  clone bytes are rescanned, and sensitive material still fails closed.
+- Repository-root `.mcp.json` is atomically masked only inside the disposable
+  clone while Grok runs, hidden from Git with an owned `skip-worktree` flag,
+  then restored byte-for-byte before artifact capture. Interrupted masks recover
+  on the next launch; a worker-created replacement is quarantined, not promoted.
+- Transient Git workspace materialization failures get one fresh disclosure scan
+  and retry. Partial directories are atomically moved out of the task namespace
+  to the existing age-gated system-temp cleanup domain; startup never recursively
+  deletes a just-failed clone path.
+- Dependency prewarm failure becomes a visible warning and execution continues;
+  verification remains mandatory for success.
+- A retained task-ID collision allocates a new suffixed task/clone instead of
+  refusing startup. Independent implementation workers may start in separate
+  clones; Root remains the single integration owner.
+- Any native warning that the requested reasoning effort was ignored invalidates
+  the run instead of accepting a lower-effort result.
+- Native analysis/research uses the OS `read-only` sandbox and `plan` permission
+  mode; workspace write approval is implementation-only.
+- Session-title generation uses the selected worker model instead of the
+  built-in `grok-build` auxiliary route, avoiding a relay-side 404 request.
+- Native metric extraction handles pretty JSON embedded after Grok warning lines.
+
+### Compatibility
+
+- Named sessions remain ACP-backed in 0.5.0. `acpx` is optional for native
+  one-shot runs but remains required for `--backend acp` and session commands.
+- Native Windows remains unsupported; use WSL2.
+
 ## [0.4.2] - 2026-07-19
 
 ### Added

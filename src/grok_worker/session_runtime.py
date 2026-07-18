@@ -10,7 +10,6 @@ from grok_worker.cache_policy import CachePolicy, ensure_cache_capacity
 from grok_worker.capacity import enforce_cap, enforce_concurrency
 from grok_worker.clone import create_workspace
 from grok_worker.constants import MANAGED_BY, MAX_CONCURRENT_WORKERS, SCHEMA_VERSION
-from grok_worker.deps import prepare_shared_env, worker_env_exports
 from grok_worker.dispatcher import (
     DispatcherLease,
     make_run_id,
@@ -18,11 +17,11 @@ from grok_worker.dispatcher import (
 )
 from grok_worker.finalize import finalize_run
 from grok_worker.gc import gc_disposable_root
-from grok_worker.grok_profile import scoped_worker_grok_home
 from grok_worker.locks import root_lock, worker_lock
 from grok_worker.metrics import read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
 from grok_worker.paths import meta_dir, meta_path
+from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.prompt_cache import Role, TaskManifest, build_context_pack, build_prompt
 from grok_worker.run_config import RunConfig, RunOutcome
 from grok_worker.session_commands import build_close_cmd
@@ -138,8 +137,6 @@ def start_session(cfg: SessionConfig) -> SessionOutcome:
         )
         state.write(session_state_path(disposable, manifest.task_id))
         prompt = bundle.full_prompt
-        if cfg.prepare_deps:
-            prompt += "\n" + worker_env_exports(prepare_shared_env(clone, cache))
         prompt_turn(cfg, state, prompt, ensure=True)
         return SessionOutcome(manifest.task_id, state.status, state.prompt_count, str(clone))
     finally:
@@ -199,14 +196,16 @@ def finalize_session(cfg: SessionConfig) -> SessionOutcome:
     )
     close_env["GROK_WORKER_LIFECYCLE"] = "1"
     close_env["GROK_WORKER_TASK_ID"] = state.task_id
-    close_env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, close_env))
+    close_env["GROK_WORKER_RUNTIME_HOME"] = str(
+        cfg.shared_cache_root / "grok-runtime-home"
+    )
 
     lease: DispatcherLease | None = None
     # Bound before invoke so a raising close cannot UnboundLocalError later.
     close_exit = 1
     try:
         lease = _acquire_session_invocation_lease(cfg)
-        with worker_lock(meta_dir(clone)):
+        with worker_lock(meta_dir(clone)), isolate_project_mcp(clone, meta_dir(clone)):
             close_exit = invoke(
                 build_close_cmd(common_command(cfg, clone), state.session_name),
                 log,

@@ -40,10 +40,10 @@ def test_activity_probe_uses_child_managed_home(tmp_path: Path) -> None:
     managed_home = tmp_path / "managed-home"
     probe = ActivityProbe(
         clone,
-        environ={"GROK_WORKER_GROK_HOME": str(managed_home)},
+        environ={"GROK_WORKER_RUNTIME_HOME": str(managed_home)},
     )
 
-    assert probe.session_root.is_relative_to(managed_home / "sessions")
+    assert probe.session_root.is_relative_to(managed_home / ".grok" / "sessions")
 
 
 def test_policy_can_change_while_lease_is_live(tmp_path: Path) -> None:
