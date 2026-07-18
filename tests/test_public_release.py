@@ -201,6 +201,22 @@ def test_native_command_uses_configured_grok_binary(monkeypatch) -> None:  # typ
     assert default_grok_bin() == "/opt/tools/custom-grok"
 
 
+def test_native_backend_prefers_canonical_windows_grok_binary(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    import grok_worker.run_config as run_config
+
+    native = tmp_path / ".grok" / "bin" / "grok.exe"
+    native.parent.mkdir(parents=True)
+    native.touch()
+    monkeypatch.delenv("GROK_WORKER_GROK_BIN", raising=False)
+    monkeypatch.setattr(run_config.sys, "platform", "win32")
+    monkeypatch.setattr(run_config.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(run_config, "which", lambda _name: "grok.CMD")
+
+    assert run_config.default_grok_bin() == str(native)
+
+
 def test_native_analysis_is_os_sandboxed_read_only(
     tmp_path: Path, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]

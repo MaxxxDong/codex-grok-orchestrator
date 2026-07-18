@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from grok_worker.constants import (
@@ -356,8 +356,9 @@ def terminate_process_tree(process: subprocess.Popen[Any], grace_seconds: float 
         return
     if process.poll() is not None:
         return
+    kill_process_group = cast(Any, os).killpg
     try:
-        getattr(os, "killpg")(process.pid, signal.SIGTERM)
+        kill_process_group(process.pid, signal.SIGTERM)
     except OSError:
         try:
             process.terminate()
@@ -369,7 +370,7 @@ def terminate_process_tree(process: subprocess.Popen[Any], grace_seconds: float 
     except subprocess.TimeoutExpired:
         pass
     try:
-        getattr(os, "killpg")(process.pid, getattr(signal, "SIGKILL"))
+        kill_process_group(process.pid, cast(Any, signal).SIGKILL)
     except OSError:
         try:
             process.kill()

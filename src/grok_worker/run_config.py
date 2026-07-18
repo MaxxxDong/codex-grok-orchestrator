@@ -165,6 +165,10 @@ def default_grok_bin() -> str:
     configured = os.environ.get("GROK_WORKER_GROK_BIN")
     if configured:
         return configured
+    if sys.platform == "win32":
+        native = Path.home() / ".grok" / "bin" / "grok.exe"
+        if native.is_file():
+            return str(native)
     configured = which("grok")
     if configured:
         return configured
