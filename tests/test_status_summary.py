@@ -4,6 +4,7 @@ Public contract:
 - ``grok-worker status --json`` each clone includes a summary derived from
   lifecycle/progress/file times and active PID:
   phase, last_activity_at, elapsed_seconds, timeout_seconds, remaining_seconds,
+  timeout_mode, hard_timeout_seconds, hard_remaining_seconds, lease_revision,
   result_ready, artifact_ready, resources(cpu_percent/rss_bytes; null when
   unsupported).
 - progress is advisory only; lifecycle state remains authoritative.
@@ -29,9 +30,15 @@ from grok_worker.status import collect_status
 REQUIRED_SUMMARY_KEYS = (
     "phase",
     "last_activity_at",
+    "activity_source",
+    "progress_step",
     "elapsed_seconds",
     "timeout_seconds",
     "remaining_seconds",
+    "timeout_mode",
+    "hard_timeout_seconds",
+    "hard_remaining_seconds",
+    "lease_revision",
     "result_ready",
     "artifact_ready",
     "resources",
@@ -80,6 +87,20 @@ def _assert_summary_fields(clone_entry: dict) -> None:
         isinstance(clone_entry["last_activity_at"], str)
         and clone_entry["last_activity_at"]
     )
+    assert clone_entry["activity_source"] in {
+        "lifecycle",
+        "progress",
+        "workspace",
+        "result",
+        "grok_session",
+        "process_start",
+    }
+    assert clone_entry["progress_step"] is None or clone_entry["progress_step"] in {
+        "planning",
+        "editing",
+        "verifying",
+        "finalizing",
+    }
     assert isinstance(clone_entry["elapsed_seconds"], (int, float))
     assert clone_entry["elapsed_seconds"] >= 0
     # timeout/remaining may be null when unknown, but keys must exist
@@ -269,6 +290,108 @@ def test_future_progress_timestamp_does_not_override_lifecycle(
     assert act_dt <= now + CLOCK_SKEW_TOLERANCE
     # Lifecycle updated_at should still be the preferred usable baseline.
     assert activity == lifecycle_updated or act_dt <= now + CLOCK_SKEW_TOLERANCE
+
+
+def test_workspace_write_advances_activity_without_progress(
+    tmp_roots: dict[str, Path],
+) -> None:
+    """Real source edits must be visible even when the model emits no progress file."""
+    from datetime import UTC, datetime
+
+    from grok_worker.status import build_clone_summary
+
+    disposable = tmp_roots["disposable"]
+    clone = _write_running_clone(
+        disposable,
+        "sum-workspace-activity",
+        pid=None,
+        token=None,
+        created_offset_seconds=120,
+    )
+    meta = WorkerMeta.read(meta_path(clone))
+    old = utc_now() - timedelta(seconds=90)
+    meta.updated_at = dt_to_iso(old) or ""
+    meta.write(meta_path(clone))
+
+    source = clone / "src" / "feature.py"
+    source.parent.mkdir()
+    source.write_text("print('working')\n", encoding="utf-8")
+    now = utc_now()
+    summary = build_clone_summary(meta, clone, now=now, active=False)
+
+    activity = datetime.fromisoformat(str(summary["last_activity_at"]))
+    if activity.tzinfo is None:
+        activity = activity.replace(tzinfo=UTC)
+    assert activity > old
+    assert summary["activity_source"] == "workspace"
+
+
+def test_workspace_activity_refuses_symlink_escape(
+    tmp_roots: dict[str, Path],
+) -> None:
+    """An outside file reached through a symlink must never manufacture activity."""
+    from grok_worker.status import build_clone_summary
+
+    disposable = tmp_roots["disposable"]
+    clone = _write_running_clone(
+        disposable,
+        "sum-workspace-symlink",
+        pid=None,
+        token=None,
+        created_offset_seconds=120,
+    )
+    meta = WorkerMeta.read(meta_path(clone))
+    outside = tmp_roots["shared"] / "outside.txt"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("outside\n", encoding="utf-8")
+    link = clone / "outside-link"
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+
+    summary = build_clone_summary(meta, clone, now=utc_now(), active=False)
+    assert summary["activity_source"] != "workspace"
+
+
+def test_progress_step_is_bounded_allowlist_only(
+    tmp_roots: dict[str, Path],
+) -> None:
+    """Expose a safe fixed phase hint, never arbitrary model-authored text."""
+    from grok_worker.status import build_clone_summary
+
+    disposable = tmp_roots["disposable"]
+    clone = _write_running_clone(disposable, "sum-progress-step")
+    meta = WorkerMeta.read(meta_path(clone))
+    progress = meta_dir(clone) / "progress.json"
+    progress.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "step": "verifying",
+                "updated_at": dt_to_iso(utc_now()),
+                "message": "TOKEN_DO_NOT_SURFACE",
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = build_clone_summary(meta, clone, active=False)
+    assert summary["progress_step"] == "verifying"
+    assert summary["activity_source"] == "progress"
+    assert "TOKEN_DO_NOT_SURFACE" not in json.dumps(summary)
+
+    progress.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "step": "success",
+                "updated_at": dt_to_iso(utc_now()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    invalid = build_clone_summary(meta, clone, active=False)
+    assert invalid["progress_step"] is None
 
 
 def test_terminal_elapsed_frozen_remaining_null(

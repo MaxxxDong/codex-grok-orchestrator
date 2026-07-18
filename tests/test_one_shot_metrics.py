@@ -72,6 +72,8 @@ def test_one_shot_success_appends_metrics_and_embeds_in_receipt(
     assert receipt["cleanup_receipt"]["sessionClosed"] is True
     worker = json.loads((art / "worker.log").read_text(encoding="utf-8"))
     assert worker["session"]["closed"] is True
+    assert worker["activity_lease"]["idle_timeout_seconds"] == 1800
+    assert worker["activity_lease"]["hard_timeout_seconds"] == 86400
     from grok_worker.artifacts import artifact_authorizes_clone_deletion
 
     assert artifact_authorizes_clone_deletion(art) is True

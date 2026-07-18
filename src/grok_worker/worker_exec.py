@@ -8,6 +8,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from grok_worker.activity_lease import (
+    LeaseError,
+    read_lease,
+    run_with_activity_lease,
+    terminate_process_tree,
+)
 from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
@@ -45,10 +51,7 @@ def execute_worker(
     def _handle_signal(signum: int, _frame: object) -> None:
         nonlocal child_proc
         if child_proc is not None and child_proc.poll() is None:
-            try:
-                child_proc.terminate()
-            except OSError:
-                pass
+            terminate_process_tree(child_proc)
         raise Interrupt(f"received signal {signum}")
 
     prev_int = signal.signal(signal.SIGINT, _handle_signal)
@@ -80,9 +83,12 @@ def execute_worker(
                     clone_path=str(clone),
                     artifact_path=str(art) if art else None,
                     message=meta.error_message or "deps failed",
+                    run_id=meta.run_id,
+                    dispatcher_id=meta.dispatcher_id,
                 )
+        oneshot_mode = "research" if cfg.prompt_only else cfg.mode
         try:
-            prompt = build_one_shot_prompt(None, cfg.mode, cfg.prompt)
+            prompt = build_one_shot_prompt(None, oneshot_mode, cfg.prompt)
         except OneShotModeError as exc:
             mark_failed(
                 meta,
@@ -102,6 +108,8 @@ def execute_worker(
                 clone_path=str(clone),
                 artifact_path=str(art) if art else None,
                 message=str(exc),
+                run_id=meta.run_id,
+                dispatcher_id=meta.dispatcher_id,
             )
         if dep_env:
             prompt = worker_env_exports(dep_env) + "\n" + prompt
@@ -130,14 +138,29 @@ def execute_worker(
         env["GROK_WORKER_TASK_ID"] = task_id
         cmd = build_acpx_cmd(cfg, clone, agent, prompt)
 
-        with agent_log.open("wb") as logfh:
-            child_proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT, env=env)
+        agent_log.write_bytes(b"")
+
+        def _record_child(process: subprocess.Popen[Any]) -> None:
+            nonlocal child_proc
+            child_proc = process
             meta.acpx_pid = child_proc.pid
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))
-            acpx_exit = int(child_proc.wait())
+
+        process_result = run_with_activity_lease(
+            cmd,
+            clone=clone,
+            log=agent_log,
+            env=env,
+            idle_timeout_seconds=cfg.timeout,
+            hard_timeout_seconds=cfg.hard_timeout,
+            on_start=_record_child,
+        )
+        acpx_exit = process_result.exit_code
         child_proc = None
         meta.acpx_exit_code = acpx_exit
+        if process_result.timeout_message:
+            meta.error_message = process_result.timeout_message
         try:
             log_text = agent_log.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -156,6 +179,10 @@ def execute_worker(
         audit: dict[str, object] = {
             "metrics": read_task_metrics(metrics_path, task_id),
         }
+        try:
+            audit["activity_lease"] = read_lease(clone).to_dict()
+        except LeaseError:
+            audit["activity_lease"] = {"available": False}
         return finalize_run(
             cfg,
             clone,
@@ -185,6 +212,8 @@ def execute_worker(
             clone_path=str(clone),
             artifact_path=str(art) if art else None,
             message=str(exc),
+            run_id=meta.run_id,
+            dispatcher_id=meta.dispatcher_id,
         )
     finally:
         signal.signal(signal.SIGINT, prev_int)

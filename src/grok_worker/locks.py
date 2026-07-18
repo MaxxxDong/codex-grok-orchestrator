@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import time
@@ -37,11 +38,29 @@ class FileLock:
                 "grok-worker requires POSIX flock semantics; native Windows is not yet supported"
             )
 
+    def _open_lock_fd(self) -> int:
+        """Open lock path without following a leaf symlink (fail closed)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Refuse attacker-created symlink lock leaves before open.
+        if self.path.is_symlink():
+            raise RuntimeError("refusing symlink lock path")
+        flags = os.O_RDWR | os.O_CREAT
+        # O_NOFOLLOW: never follow a TOCTOU-replaced symlink leaf when available.
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        try:
+            return os.open(str(self.path), flags, 0o644)
+        except OSError as exc:
+            # ELOOP when leaf is a symlink under O_NOFOLLOW.
+            if exc.errno in {errno.ELOOP, errno.EEXIST} or self.path.is_symlink():
+                raise RuntimeError("refusing symlink lock path") from exc
+            raise
+
     def acquire(self) -> None:
         self._require_posix_locking()
         assert fcntl is not None
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
+        fd = self._open_lock_fd()
         try:
             if self.shared:
                 while True:
@@ -61,8 +80,10 @@ class FileLock:
         """Non-blocking acquire. True if held by caller."""
         self._require_posix_locking()
         assert fcntl is not None
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fd = self._open_lock_fd()
+        except RuntimeError:
+            raise
         try:
             operation = fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX
             fcntl.flock(fd, operation | fcntl.LOCK_NB)

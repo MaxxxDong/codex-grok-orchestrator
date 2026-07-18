@@ -44,6 +44,8 @@ SENSITIVE_KEYS = frozenset(
 REQUIRED_EVENT_KEYS = frozenset(
     {"event_id", "task_id", "state", "timestamp", "artifact_path"}
 )
+# New optional pointer fields (present on new emits when known).
+OPTIONAL_EVENT_KEYS = frozenset({"run_id", "dispatcher_id"})
 
 
 def _notification_log(shared: Path) -> Path:
@@ -420,3 +422,109 @@ def test_bounded_wait_returns_after_delayed_event(
     assert matched[0]["task_id"] == "wait-late"
     assert elapsed < 1.5, f"wait should unblock early, elapsed={elapsed}"
     assert elapsed >= 0.1, f"wait must actually block until event, elapsed={elapsed}"
+
+
+def test_emit_dedupes_by_run_id_not_only_task_state(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    a = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-aaa",
+        shared_cache_root=shared,
+    )
+    b = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-bbb",
+        shared_cache_root=shared,
+    )
+    assert a is not None and b is not None
+    again = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-aaa",
+        shared_cache_root=shared,
+    )
+    assert again is None
+    events = list_completion_events(shared_cache_root=shared, wait_seconds=0)
+    matching = [e for e in events if e.get("task_id") == "same-task"]
+    assert len(matching) == 2
+    assert {e["run_id"] for e in matching} == {"run-aaa", "run-bbb"}
+
+
+def test_list_events_filter_by_run_id_and_dispatcher(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    emit_completion_event(
+        task_id="t1",
+        state="success",
+        run_id="r1",
+        dispatcher_id="d1",
+        shared_cache_root=shared,
+    )
+    emit_completion_event(
+        task_id="t2",
+        state="failed",
+        run_id="r2",
+        dispatcher_id="d2",
+        shared_cache_root=shared,
+    )
+    only_r1 = list_completion_events(shared_cache_root=shared, run_id="r1", wait_seconds=0)
+    assert len(only_r1) == 1 and only_r1[0]["run_id"] == "r1"
+    only_d2 = list_completion_events(
+        shared_cache_root=shared, dispatcher_id="d2", wait_seconds=0
+    )
+    assert len(only_d2) == 1 and only_d2[0]["dispatcher_id"] == "d2"
+    # Unfiltered remains compatible.
+    all_events = list_completion_events(shared_cache_root=shared, wait_seconds=0)
+    assert len(all_events) >= 2
+
+
+def test_events_wait_bounds_default_and_reject(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from grok_worker.completion_events import (
+        DEFAULT_EVENT_WAIT_SECONDS,
+        MAX_EVENT_WAIT_SECONDS,
+        EventWaitError,
+        validate_wait_seconds,
+    )
+
+    assert DEFAULT_EVENT_WAIT_SECONDS == 30
+    assert MAX_EVENT_WAIT_SECONDS == 120
+    assert validate_wait_seconds(0) == 0
+    assert validate_wait_seconds(30) == 30
+    assert validate_wait_seconds(120) == 120
+    with pytest.raises(EventWaitError):
+        validate_wait_seconds(-1)
+    with pytest.raises(EventWaitError):
+        validate_wait_seconds(121)
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    code = main(
+        [
+            "events",
+            "--shared-cache-root",
+            str(shared),
+            "--wait-seconds",
+            "121",
+            "--json",
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "120" in err or "wait" in err.lower()

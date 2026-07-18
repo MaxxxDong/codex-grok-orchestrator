@@ -117,6 +117,8 @@ ONESHOT_TASK_DELIMITER = "\n--- GROK_ONE_SHOT_TASK_V1 ---\n"
 ONESHOT_MODE_TO_ROLE: dict[str, Role] = {
     "implementation": Role.IMPLEMENT,
     "analysis": Role.REVIEW,
+    # Prompt-only research one-shot (no source tree); never maps to implement.
+    "research": Role.RESEARCH,
 }
 
 

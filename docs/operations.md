@@ -42,13 +42,20 @@ Required pointer fields:
 - `timestamp` — ISO-8601 UTC
 - `artifact_path` — string or null
 
+Optional pointer fields on new emits (when known):
+
+- `run_id` — unique per execution
+- `dispatcher_id` — explicit dispatcher scope
+
 Forbidden in events: prompt text, tokens, API keys, environment maps,
-stdout/stderr, model/agent output, MCP config.
+stdout/stderr, model/agent output, MCP config. Never include secret values or
+file contents.
 
 ### Dedup and concurrency
 
-- Dedup key: `(task_id, state)`. Re-finalize / re-reconcile of the same terminal
-  pair does not append again.
+- Dedup key: `(run_id, state)` when `run_id` is present. Legacy rows without
+  `run_id` still dedupe as `(task_id, state)` among run_id-less events.
+- Re-finalize / re-reconcile of the same terminal pair does not append again.
 - Appends take an exclusive lock beside the log; writes are full JSON lines with
   flush/fsync so concurrent writers do not leave half-line JSON.
 - **Best-effort only**: notification I/O or serialization failures never reverse
@@ -57,6 +64,15 @@ stdout/stderr, model/agent output, MCP config.
 - Readers **discard** malformed JSONL rows, empty objects (`{}`), missing
   required pointer fields, and wrong-typed values; they never surface incomplete
   rows as events.
+- Optional filters: `--run-id` / `--dispatcher-id`. Omitting filters preserves
+  unfiltered (compatible) reads.
+
+### Event wait bounds
+
+- Default `--wait-seconds` is **30**.
+- Explicit **0** is non-blocking.
+- Values must be in **0..120** inclusive; negatives and values greater than 120
+  are rejected. Callers may repeat waits; 120 is not a worker timeout.
 
 ### Typical commands
 
@@ -83,6 +99,97 @@ grok-worker events \
 JSON envelope includes an `events` array. Exit 0 on successful query even when
 the list is empty.
 
+## 1b. Per-dispatcher concurrency (OS flock slot leases)
+
+There is **no** machine-global worker limit. With an explicit `--dispatcher-id`
+(or `GROK_WORKER_DISPATCHER_ID`), capacity is reserved by non-blocking exclusive
+`flock` on fixed slot files under the shared cache:
+
+```text
+$CACHE/dispatchers/<dispatcher_hash>/slots/00.lock .. 09.lock
+```
+
+Acquiring one of **10** nonblocking slot locks is the atomic capacity
+reservation. The `FileLock` is held for the entire active CLI / ACP invocation
+and released in `finally`; process crash releases the lease automatically via
+OS flock semantics. If all ten are held, the runner raises
+`DISPATCHER_CONCURRENCY_BUSY` with `active=10` / `limit=10` and **never**
+preempts another worker.
+
+Other dispatcher IDs use different hash directories and never count or block one
+another. Without `dispatcher_id`, only **root-scoped** concurrency applies
+(backward compatible). Documentation must not claim cross-root enforcement
+unless an explicit dispatcher ID is set.
+
+**Active capacity means active Grok invocations/processes**, not idle open
+session objects. Named-session `session-start`, each follow-up, and finalize
+acquire and release a **transient** dispatcher slot around their actual ACP
+invocation. Idle `SESSION_OPEN` does **not** permanently consume the budget.
+Root-scoped active counts also exclude `SESSION_OPEN`.
+
+Same-source policy: implementation mode additionally acquires a nonblocking
+source exclusion lock under the same dispatcher hash, keyed by the canonical
+source hash (never a raw path in lock filenames or errors). Analysis does not
+take the source lock. A different dispatcher must not block.
+
+There is **no** persistent `roots.json` registry or advisory slot-pointer JSON;
+the only reservation primitive is the held OS flock.
+
+## 1c. Timeouts and health
+
+| Policy | Value | Notes |
+|---|---|---|
+| Inactivity lease | **1800** s | Renewed by observable Grok/session/workspace activity |
+| Hard safety cap | **86400** s | Separate absolute cap; `--hard-timeout 0` disables |
+| Health inspect interval | **300** s | Diagnostic / read-only via `grok-worker health` |
+
+Health inspection records lifecycle, bounded non-symlink workspace activity,
+the fixed advisory progress step, result/artifact readiness, PID identity, and
+CPU/RSS when available. It does **not** terminate, interrupt, restart, or mutate a
+running worker merely because the interval elapsed. The foreground runner owns
+termination: it reads `.grok-worker/lease.json`, renews the inactivity deadline
+from managed Grok session events, progress/result writes, agent-log growth, and
+bounded workspace activity, and terminates the ACP process tree only when the
+idle lease or hard cap expires. `acpx` receives no fixed `--timeout`, so the
+policy may be changed during execution:
+
+```bash
+grok-worker lease-set --disposable-root "$DISPOSABLE" --task-id TASK \
+  --idle-timeout 3600 --hard-timeout 172800
+```
+
+The lease file is root-owned control/telemetry. The worker may not edit it;
+lifecycle remains the authority for worker state and terminal outcome.
+
+## 1d. Dirty disclosure and prompt-only
+
+- Untracked discovery and fingerprint paths always use `--exclude-standard`;
+  ignored files such as `.env` are never copied into the clone baseline.
+- Prefer repeatable `--include-dirty-path PATH` allowlists (repository-relative
+  only). Legacy bare `--include-dirty` is **refused** when nonignored dirty
+  material exists (actionable migration to the allowlist). Ignored-only material
+  remains excluded and is never copied.
+- Absolute paths, `..`, NUL, `.git`/managed paths, ignored paths, and file or
+  directory symlink escapes are rejected. Renames may require both old and new
+  paths. Already-deleted tracked paths are allowed (deletion is safe) and are
+  not blocked by path/content scanning.
+- Conventional template basenames (`.env.example`, `.env.sample`,
+  `.env.template`, `.env.dist`) are exempt from path-only refusal but still have
+  disclosed content scanned for high-confidence secrets.
+- Fail closed when `git check-ignore` or reading selected material errors; never
+  include file contents or secret values in the error.
+- Before clone/deps, high-confidence sensitive dirty/non-git material is refused
+  without logging secret values. Clean committed Git content stays trusted.
+- A structured disclosure summary (source_kind, base SHA, counts, relative
+  included paths, reason codes, risk decision — values/content/prompt/env-free)
+  is written under `.grok-worker/disclosure.json` and also stored on
+  `WorkerMeta` / lifecycle so the final `worker.log` retains it after successful
+  clone deletion.
+- `--prompt-only` runs analysis/research in a fresh empty managed workspace with
+  honest `source_realpath=prompt-only`, the same three-file artifact contract,
+  and never synthesizes implementation success. Implementation mode, dirty
+  flags, and a non-null `source` are rejected (CLI and library/API path).
+
 ## 2. Status summary
 
 ### Per-clone fields (`status --json`)
@@ -92,19 +199,31 @@ Each managed clone entry includes:
 | Field | Source / notes |
 |---|---|
 | `phase` | Lifecycle state only (never progress `"success"` over running) |
-| `last_activity_at` | Best usable of lifecycle `updated_at`, progress timestamps, file mtimes; timestamps more than **5s** in the future of status time (clock-skew tolerance) are ignored so they cannot manufacture recent activity |
+| `last_activity_at` | Best usable of lifecycle `updated_at`, progress/result timestamps, or a bounded non-symlink workspace/verification-file scan; timestamps more than **5s** in the future of status time are ignored |
+| `activity_source` | `lifecycle`, `progress`, `workspace`, or `result`; source of `last_activity_at`, never a success signal |
+| `progress_step` | `planning`, `editing`, `verifying`, `finalizing`, or null; arbitrary worker-authored text is never returned |
 | `elapsed_seconds` | Active (`creating`/`running`/`finalizing`/…): now − `created_at`. Terminal (`success`/`failed`/`keep`/…): frozen at `updated_at − created_at` |
-| `timeout_seconds` | Optional lifecycle field set at create; null on legacy metadata |
-| `remaining_seconds` | Active: `timeout − elapsed` when timeout known. Terminal: always **null** (countdown is not live) |
+| `timeout_seconds` | Active lease inactivity window; legacy clones retain the old fixed-timeout value |
+| `remaining_seconds` | Activity lease: `idle timeout − time since last observed activity`; terminal: always null |
+| `timeout_mode` | `activity_lease` for new runs, `fixed_legacy` for old metadata |
+| `hard_timeout_seconds` / `hard_remaining_seconds` | Separate absolute safety cap and live remainder; null when disabled or terminal |
+| `lease_revision` | Increments when an operator changes policy with `lease-set` |
 | `result_ready` | True only if clone has a real `.grok-output/result.json` file |
 | `artifact_ready` | True only when metadata marks complete **and** artifact path exists |
 | `resources.cpu_percent` / `resources.rss_bytes` | Best-effort via short-timeout `ps` on preferred PID `acpx_pid` → `runner_pid` → legacy `pid`; null when inactive/unsupported |
 
 ### Fail-soft progress
 
-Illegal, truncated, or wrong-typed `progress.json` is ignored. Status collection
-must not raise. Progress must never promote a running lifecycle into success.
-Future or unparseable advisory timestamps never override lifecycle `updated_at`.
+Implementation/debug roles must create `.grok-worker/progress.json` and a valid
+`status=partial` `.grok-output/result.json` checkpoint through same-directory
+temporary files plus atomic rename before extensive work. They update the fixed
+step at phase transitions and atomically replace the result only after verification.
+The partial checkpoint is evidence only and can never satisfy semantic success.
+
+Illegal, truncated, wrong-typed, future-dated, or non-allowlisted progress is
+ignored. Status collection must not raise. Progress and workspace activity must
+never promote a running lifecycle into success. The workspace scan is capped at
+20,000 entries / 16 levels and never follows symlinks or enters managed/cache dirs.
 
 ### Typical command
 

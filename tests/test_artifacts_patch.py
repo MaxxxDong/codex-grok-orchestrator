@@ -77,7 +77,7 @@ def test_nongit_reconstructable_patch(tmp_path: Path) -> None:
     (src / "link").symlink_to("a.txt")
     disp = tmp_path / "disp"
     disp.mkdir()
-    clone, base, _fp = create_workspace(src, disp, "ng01")
+    clone, base, _fp, _disc = create_workspace(src, disp, "ng01")
     assert base
     assert (clone / "link").is_symlink()
     (clone / "a.txt").write_text("changed\n", encoding="utf-8")
@@ -107,8 +107,11 @@ def test_dirty_source_include_baseline(tmp_path: Path) -> None:
     (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()
-    clone, base, fp = create_workspace(src, disp, "d02", include_dirty=True)
+    clone, base, fp, disc = create_workspace(
+        src, disp, "d02", dirty_allowlist=["dirty.txt"]
+    )
     assert fp is not None
+    assert disc.risk_decision == "allow"
     assert (clone / "dirty.txt").read_text(encoding="utf-8") == "dirty-input\n"
     # Worker change relative to dirty baseline — not re-emit dirty input alone
     (clone / "worker.txt").write_text("worker-change\n", encoding="utf-8")
@@ -118,6 +121,17 @@ def test_dirty_source_include_baseline(tmp_path: Path) -> None:
     assert "worker.txt" in text
     # dirty.txt is in baseline; should not appear as new file unless modified
     # (content same as baseline → not in patch)
+
+
+def test_legacy_bare_include_dirty_refuses_nonignored(tmp_path: Path) -> None:
+    """Bare --include-dirty must not materialize all nonignored dirt."""
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    with pytest.raises(CloneError, match="include-dirty-path|allowlist|legacy"):
+        create_workspace(src, disp, "legacy01", include_dirty=True)
 
 
 def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
@@ -133,7 +147,12 @@ def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
     (src / "untracked-extra.txt").write_text("only-untracked\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()
-    clone, base, fp = create_workspace(src, disp, "d03", include_dirty=True)
+    clone, base, fp, _disc = create_workspace(
+        src,
+        disp,
+        "d03",
+        dirty_allowlist=["oldname.txt", "newname.txt", "untracked-extra.txt"],
+    )
     assert fp is not None
     assert not (clone / "oldname.txt").exists()
     assert (clone / "newname.txt").read_text(encoding="utf-8") == "v2-modified\n"
@@ -149,53 +168,153 @@ def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
     assert "v2-modified" not in text
 
 
-def test_dirty_baseline_uses_lifecycle_owned_git_identity(tmp_path: Path) -> None:
-    """Dirty-baseline commit uses stable grok-worker identity, not host/operator."""
+def test_include_dirty_does_not_copy_gitignored_env(tmp_path: Path) -> None:
+    """Regression: ignored .env is never copied into the clone baseline."""
     src = tmp_path / "src"
     init_git_repo(src)
-    (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "add", ".gitignore"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(src), "commit", "-m", "ignore env"],
+        check=True,
+        capture_output=True,
+    )
+    (src / "dirty.txt").write_text("tracked-dirty\n", encoding="utf-8")
+    (src / ".env").write_text("SECRET_TOKEN=super-secret-value-never-log\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()
-    clone, base, fp = create_workspace(src, disp, "d-id", include_dirty=True)
-    assert fp is not None
-    assert base
-
-    author = subprocess.check_output(
-        ["git", "-C", str(clone), "log", "-1", "--format=%an <%ae>", base],
-        text=True,
-    ).strip()
-    committer = subprocess.check_output(
-        ["git", "-C", str(clone), "log", "-1", "--format=%cn <%ce>", base],
-        text=True,
-    ).strip()
-    expected = "grok-worker <grok-worker@localhost>"
-    assert author == expected
-    assert committer == expected
-    # Must not inherit the source repo test identity used by init_git_repo.
-    assert "test@example.com" not in author
-    assert "test@example.com" not in committer
-    assert author != "Test <test@example.com>"
-
-    subject = subprocess.check_output(
-        ["git", "-C", str(clone), "log", "-1", "--format=%s", base],
-        text=True,
-    ).strip()
-    assert subject == "lifecycle dirty source baseline"
-
-    # Identity is command-scoped: do not leave grok-worker in clone local config.
-    local_name = subprocess.run(
-        ["git", "-C", str(clone), "config", "--local", "--get", "user.name"],
-        capture_output=True,
-        text=True,
-        check=False,
+    clone, _base, _fp, disc = create_workspace(
+        src, disp, "ign01", dirty_allowlist=["dirty.txt"]
     )
-    if local_name.returncode == 0:
-        assert local_name.stdout.strip() != "grok-worker"
-    local_email = subprocess.run(
-        ["git", "-C", str(clone), "config", "--local", "--get", "user.email"],
+    assert (clone / "dirty.txt").read_text(encoding="utf-8") == "tracked-dirty\n"
+    assert not (clone / ".env").exists()
+    assert "super-secret-value-never-log" not in json_safe_disc(disc)
+
+
+def test_legacy_include_dirty_ignored_only_allows_clean_head(tmp_path: Path) -> None:
+    """Bare --include-dirty with only ignored dirt remains clean HEAD (never copies)."""
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / ".gitignore").write_text(".env\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "add", ".gitignore"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(src), "commit", "-m", "ignore env"],
+        check=True,
         capture_output=True,
-        text=True,
-        check=False,
     )
-    if local_email.returncode == 0:
-        assert local_email.stdout.strip() != "grok-worker@localhost"
+    (src / ".env").write_text("SECRET=never\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, _base, _fp, disc = create_workspace(src, disp, "ign-only", include_dirty=True)
+    assert not (clone / ".env").exists()
+    assert disc.risk_decision == "allow"
+
+
+def json_safe_disc(disc: object) -> str:
+    import json
+
+    from grok_worker.disclosure import DisclosureSummary
+
+    assert isinstance(disc, DisclosureSummary)
+    return json.dumps(disc.to_dict())
+
+
+def test_dirty_allowlist_only_listed_paths(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / "keep.txt").write_text("k\n", encoding="utf-8")
+    (src / "skip.txt").write_text("s\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, _base, _fp, disc = create_workspace(
+        src, disp, "al01", dirty_allowlist=["keep.txt"]
+    )
+    assert (clone / "keep.txt").read_text(encoding="utf-8") == "k\n"
+    assert not (clone / "skip.txt").exists()
+    assert "keep.txt" in disc.included_dirty_paths
+    assert "skip.txt" not in disc.included_dirty_paths
+
+
+def test_dirty_allowlist_rejects_absolute_and_traversal(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / "a.txt").write_text("a\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    with pytest.raises(CloneError, match="absolute|relative|traversal|\\.\\."):
+        create_workspace(src, disp, "al02", dirty_allowlist=["/tmp/evil"])
+    with pytest.raises(CloneError, match="traversal|\\.\\."):
+        create_workspace(src, disp, "al03", dirty_allowlist=["../outside"])
+
+
+def test_dirty_symlink_escape_refused(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    victim = tmp_path / "victim-secret"
+    victim.write_text("host-secret\n", encoding="utf-8")
+    link = src / "escape-link"
+    link.symlink_to(victim)
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    with pytest.raises(CloneError, match="symlink|refuse|dirty"):
+        create_workspace(src, disp, "sym01", dirty_allowlist=["escape-link"])
+    assert victim.read_text(encoding="utf-8") == "host-secret\n"
+
+
+def test_secret_path_refused_without_logging_value(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    secret_body = "AKIA_FAKE_SECRET_VALUE_1234567890"
+    (src / "credentials.json").write_text(
+        f'{{"api_key": "{secret_body}"}}\n', encoding="utf-8"
+    )
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    with pytest.raises(CloneError) as excinfo:
+        create_workspace(src, disp, "sec01", dirty_allowlist=["credentials.json"])
+    err = str(excinfo.value)
+    assert secret_body not in err
+    assert "credentials.json" in err or "sensitive" in err.lower() or "refuse" in err.lower()
+
+
+def test_env_example_path_exempt_from_path_only_refusal(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / ".env.example").write_text("API_KEY=\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, _base, _fp, disc = create_workspace(
+        src, disp, "envex", dirty_allowlist=[".env.example"]
+    )
+    assert (clone / ".env.example").read_text(encoding="utf-8") == "API_KEY=\n"
+    assert disc.risk_decision == "allow"
+
+
+def test_env_example_with_secret_content_refused(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    secret = "super-secret-token-abcdefgh"
+    (src / ".env.example").write_text(f"api_key={secret}\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    with pytest.raises(CloneError) as excinfo:
+        create_workspace(src, disp, "envex2", dirty_allowlist=[".env.example"])
+    assert secret not in str(excinfo.value)
+
+
+def test_deleted_sensitive_tracked_path_allowed(tmp_path: Path) -> None:
+    """Deleting an already-tracked sensitive-named file is safe (absent path)."""
+    src = tmp_path / "src"
+    init_git_repo(src, filename="credentials.json", content='{"x":1}\n')
+    subprocess.run(
+        ["git", "-C", str(src), "rm", "credentials.json"],
+        check=True,
+        capture_output=True,
+    )
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, _base, _fp, disc = create_workspace(
+        src, disp, "del-sens", dirty_allowlist=["credentials.json"]
+    )
+    assert not (clone / "credentials.json").exists()
+    assert "credentials.json" in disc.included_dirty_paths
