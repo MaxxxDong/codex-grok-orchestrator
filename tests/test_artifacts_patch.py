@@ -168,6 +168,46 @@ def test_dirty_rename_modified_untracked_exact_baseline(tmp_path: Path) -> None:
     assert "v2-modified" not in text
 
 
+def test_dirty_baseline_uses_command_scoped_git_identity(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    init_git_repo(src)
+    (src / "dirty.txt").write_text("dirty-input\n", encoding="utf-8")
+    disp = tmp_path / "disp"
+    disp.mkdir()
+    clone, base, fingerprint, _disclosure = create_workspace(
+        src,
+        disp,
+        "d-id",
+        dirty_allowlist=["dirty.txt"],
+    )
+    assert fingerprint is not None
+
+    author = subprocess.check_output(
+        ["git", "-C", str(clone), "log", "-1", "--format=%an <%ae>", base],
+        text=True,
+    ).strip()
+    committer = subprocess.check_output(
+        ["git", "-C", str(clone), "log", "-1", "--format=%cn <%ce>", base],
+        text=True,
+    ).strip()
+    expected = "grok-worker <grok-worker@localhost>"
+    assert author == expected
+    assert committer == expected
+
+    for key, owned_value in (
+        ("user.name", "grok-worker"),
+        ("user.email", "grok-worker@localhost"),
+    ):
+        configured = subprocess.run(
+            ["git", "-C", str(clone), "config", "--local", "--get", key],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if configured.returncode == 0:
+            assert configured.stdout.strip() != owned_value
+
+
 def test_include_dirty_does_not_copy_gitignored_env(tmp_path: Path) -> None:
     """Regression: ignored .env is never copied into the clone baseline."""
     src = tmp_path / "src"
