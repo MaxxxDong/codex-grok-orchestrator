@@ -167,17 +167,27 @@ def create_nongit_copy(source: Path, dest: Path) -> str:
     return init_private_baseline(dest)
 
 
-def _claim_destination(dest: Path) -> tuple[int, int]:
-    """Atomically create the task directory and return its inode identity."""
+def _claim_destination(dest: Path) -> tuple[int, int, int]:
+    """Atomically create the task directory and hold its inode identity open."""
     try:
         dest.mkdir(parents=True, mode=0o700, exist_ok=False)
     except FileExistsError as exc:
         raise CloneError(f"refusing existing path: {dest}") from exc
-    stat = dest.stat(follow_symlinks=False)
-    return stat.st_dev, stat.st_ino
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(dest, flags)
+    except OSError:
+        dest.rmdir()
+        raise
+    stat = os.fstat(fd)
+    return stat.st_dev, stat.st_ino, fd
 
 
-def _remove_partial_destination(dest: Path, owner: tuple[int, int]) -> bool:
+def _release_destination(owner: tuple[int, int, int]) -> None:
+    os.close(owner[2])
+
+
+def _remove_partial_destination(dest: Path, owner: tuple[int, int, int]) -> bool:
     """Move the claimed directory out of the task namespace without deleting it.
 
     Recursive deletion cannot be made inode-atomic on POSIX. The existing
@@ -185,22 +195,28 @@ def _remove_partial_destination(dest: Path, owner: tuple[int, int]) -> bool:
     """
     quarantine = Path(tempfile.gettempdir()) / f"grok-worker-partial-{uuid.uuid4().hex}"
     try:
-        os.rename(dest, quarantine)
-    except OSError as exc:
-        if isinstance(exc, FileNotFoundError):
-            return True
-        return False
-    stat = quarantine.stat(follow_symlinks=False)
-    if quarantine.is_symlink() or (stat.st_dev, stat.st_ino) != owner:
-        # Preserve an unexpected replacement. Best-effort restore its public
-        # name; if that raced too, leave the quarantined bytes untouched.
-        if not dest.exists() and not dest.is_symlink():
-            try:
-                os.rename(quarantine, dest)
-            except OSError:
-                pass
-        return False
-    return True
+        try:
+            os.rename(dest, quarantine)
+        except OSError as exc:
+            if isinstance(exc, FileNotFoundError):
+                return True
+            return False
+        try:
+            stat = quarantine.stat(follow_symlinks=False)
+        except OSError:
+            return False
+        if quarantine.is_symlink() or (stat.st_dev, stat.st_ino) != owner[:2]:
+            # Preserve an unexpected replacement. Best-effort restore its public
+            # name; if that raced too, leave the quarantined bytes untouched.
+            if not dest.exists() and not dest.is_symlink():
+                try:
+                    os.rename(quarantine, dest)
+                except OSError:
+                    pass
+            return False
+        return True
+    finally:
+        _release_destination(owner)
 
 
 def _excluded_rel(rel: str) -> bool:
@@ -441,7 +457,7 @@ def create_workspace(
     if source_is_git:
         last_error: Exception | None = None
         for attempt in range(2):
-            owner: tuple[int, int] | None = None
+            owner: tuple[int, int, int] | None = None
             try:
                 summary = plan_disclosure(
                     source,
@@ -465,10 +481,12 @@ def create_workspace(
                     fp = source_state_fingerprint(source, allowlist=allow)
                     summary.base_sha = base
                     write_disclosure_summary(dest, summary)
+                    _release_destination(owner)
                     return dest, base, fp, summary
                 base = git_head(dest)
                 summary.base_sha = base
                 write_disclosure_summary(dest, summary)
+                _release_destination(owner)
                 return dest, base, None, summary
             except DisclosureError as exc:
                 if owner is not None and not _remove_partial_destination(dest, owner):
@@ -488,7 +506,7 @@ def create_workspace(
             f"workspace snapshot failed after one clean retry: {last_error}"
         ) from last_error
 
-    non_git_owner: tuple[int, int] | None = None
+    non_git_owner: tuple[int, int, int] | None = None
     try:
         summary = plan_disclosure(
             source,
@@ -519,4 +537,6 @@ def create_workspace(
         raise CloneError(f"non-git workspace copy failed; partial copy cleaned: {exc}") from exc
     summary.base_sha = base
     write_disclosure_summary(dest, summary)
+    assert non_git_owner is not None
+    _release_destination(non_git_owner)
     return dest, base, source_state_fingerprint(source), summary
