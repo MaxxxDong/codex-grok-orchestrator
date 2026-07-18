@@ -11,6 +11,7 @@ from pathlib import Path
 
 from grok_worker.grok_profile import (
     GrokProfileError,
+    isolated_child_environment,
     prepare_isolated_profile,
     validate_isolated_profile,
 )
@@ -59,8 +60,7 @@ def main() -> int:
             model_id=default_model(),
             reasoning_effort=default_reasoning_effort(),
         )
-        child_env = os.environ.copy()
-        child_env.update(profile.environment)
+        child_env = isolated_child_environment(os.environ, profile)
         validate_isolated_profile(
             grok_bin=command[0],
             profile=profile,

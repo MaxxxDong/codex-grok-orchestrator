@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -29,6 +30,7 @@ _ACP_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 _AGENT_OUTPUT_SCAN_LIMIT = 2048
+_STARTUP_ERROR_RE = re.compile(r"\[grok-worker\]\s*startup failed:\s*([^\n\r]{1,160})")
 
 
 def summarize_acp_failure(agent_output: str) -> str | None:
@@ -49,6 +51,29 @@ def summarize_acp_failure(agent_output: str) -> str | None:
     return f"upstream ACP failure: {detail}"
 
 
+def summarize_backend_failure(agent_output: str) -> str | None:
+    """Classify bounded structured startup, ACP, or native JSON failures."""
+    acp = summarize_acp_failure(agent_output)
+    if acp:
+        return acp
+    snippet = agent_output[:_AGENT_OUTPUT_SCAN_LIMIT]
+    startup = _STARTUP_ERROR_RE.search(snippet)
+    if startup:
+        return f"backend startup failure: {' '.join(startup.group(1).split())}"
+    for line in snippet.splitlines():
+        try:
+            payload = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "error":
+            continue
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            detail = " ".join(message.split())[:160]
+            return f"upstream native failure: {detail}"
+    return None
+
+
 def _compose_result_error_message(exc: BaseException, agent_log: Path | None) -> str:
     """Preserve structured-result failure and surface recognizable ACP failures."""
     structured = str(exc)
@@ -58,10 +83,10 @@ def _compose_result_error_message(exc: BaseException, agent_log: Path | None) ->
         agent_output = agent_log.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return structured
-    acp_summary = summarize_acp_failure(agent_output)
-    if not acp_summary:
+    backend_summary = summarize_backend_failure(agent_output)
+    if not backend_summary:
         return structured
-    return f"{structured}; {acp_summary}"
+    return f"{structured}; {backend_summary}"
 
 
 def _notify_terminal(

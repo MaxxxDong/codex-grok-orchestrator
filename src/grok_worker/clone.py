@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,6 +16,7 @@ from grok_worker.disclosure import (
     DisclosureError,
     DisclosureSummary,
     plan_disclosure,
+    validate_materialized_paths,
     write_disclosure_summary,
 )
 from grok_worker.patch_capture import init_private_baseline
@@ -73,7 +75,10 @@ def clone_path_for(disposable_root: Path, task_id: str) -> Path:
 def create_git_clone(source: Path, dest: Path) -> str:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
-        raise CloneError(f"clone destination already exists: {dest}")
+        if not dest.is_dir() or dest.is_symlink() or any(dest.iterdir()):
+            raise CloneError(f"clone destination is not an owned empty directory: {dest}")
+    else:
+        dest.mkdir(mode=0o700)
     try:
         subprocess.run(
             ["git", "clone", "--no-hardlinks", str(source.resolve()), str(dest)],
@@ -100,7 +105,10 @@ def _ignore_copy(src: str, names: list[str]) -> set[str]:
 def create_nongit_copy(source: Path, dest: Path) -> str:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
-        raise CloneError(f"copy destination already exists: {dest}")
+        if not dest.is_dir() or dest.is_symlink() or any(dest.iterdir()):
+            raise CloneError(f"copy destination is not an owned empty directory: {dest}")
+    else:
+        dest.mkdir(mode=0o700)
     # Refuse outbound/absolute file *and directory* symlinks before materialization.
     for root, dirs, files in os.walk(source, followlinks=False):
         # Inspect directory symlinks (including escapes) before pruning them.
@@ -154,8 +162,45 @@ def create_nongit_copy(source: Path, dest: Path) -> str:
         symlinks=True,
         ignore=_ignore_copy,
         ignore_dangling_symlinks=True,
+        dirs_exist_ok=True,
     )
     return init_private_baseline(dest)
+
+
+def _claim_destination(dest: Path) -> tuple[int, int]:
+    """Atomically create the task directory and return its inode identity."""
+    try:
+        dest.mkdir(parents=True, mode=0o700, exist_ok=False)
+    except FileExistsError as exc:
+        raise CloneError(f"refusing existing path: {dest}") from exc
+    stat = dest.stat(follow_symlinks=False)
+    return stat.st_dev, stat.st_ino
+
+
+def _remove_partial_destination(dest: Path, owner: tuple[int, int]) -> bool:
+    """Move the claimed directory out of the task namespace without deleting it.
+
+    Recursive deletion cannot be made inode-atomic on POSIX. The existing
+    stale-temp GC handles this secret-free random quarantine after its age gate.
+    """
+    quarantine = Path(tempfile.gettempdir()) / f"grok-worker-partial-{uuid.uuid4().hex}"
+    try:
+        os.rename(dest, quarantine)
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            return True
+        return False
+    stat = quarantine.stat(follow_symlinks=False)
+    if quarantine.is_symlink() or (stat.st_dev, stat.st_ino) != owner:
+        # Preserve an unexpected replacement. Best-effort restore its public
+        # name; if that raced too, leave the quarantined bytes untouched.
+        if not dest.exists() and not dest.is_symlink():
+            try:
+                os.rename(quarantine, dest)
+            except OSError:
+                pass
+        return False
+    return True
 
 
 def _excluded_rel(rel: str) -> bool:
@@ -391,45 +436,87 @@ def create_workspace(
     if dest.exists() or dest.is_symlink():
         raise CloneError(f"refusing existing path: {dest}")
 
+    source_is_git = is_git_repo(source)
+
+    if source_is_git:
+        last_error: Exception | None = None
+        for attempt in range(2):
+            owner: tuple[int, int] | None = None
+            try:
+                summary = plan_disclosure(
+                    source,
+                    include_dirty=include_dirty,
+                    dirty_allowlist=dirty_allowlist,
+                    prompt_only=False,
+                    is_git=True,
+                )
+                dirty = git_is_dirty(source)
+                allow = list(summary.included_dirty_paths)
+                owner = _claim_destination(dest)
+                create_git_clone(source, dest)
+                if dirty:
+                    # Snapshot all safe nonignored dirt by default. The second
+                    # attempt rescans if the source changed during materialization.
+                    if allow:
+                        base = _apply_dirty_to_clone(source, dest, allowlist=allow)
+                    else:
+                        base = git_head(dest)
+                    validate_materialized_paths(dest, allow)
+                    fp = source_state_fingerprint(source, allowlist=allow)
+                    summary.base_sha = base
+                    write_disclosure_summary(dest, summary)
+                    return dest, base, fp, summary
+                base = git_head(dest)
+                summary.base_sha = base
+                write_disclosure_summary(dest, summary)
+                return dest, base, None, summary
+            except DisclosureError as exc:
+                if owner is not None and not _remove_partial_destination(dest, owner):
+                    raise CloneError(
+                        "refusing partial workspace cleanup: destination ownership changed"
+                    ) from exc
+                raise CloneError(str(exc)) from exc
+            except (CloneError, OSError, subprocess.SubprocessError) as exc:
+                last_error = exc
+                if owner is not None and not _remove_partial_destination(dest, owner):
+                    raise CloneError(
+                        "refusing partial workspace cleanup: destination ownership changed"
+                    ) from exc
+                if attempt == 0:
+                    continue
+        raise CloneError(
+            f"workspace snapshot failed after one clean retry: {last_error}"
+        ) from last_error
+
+    non_git_owner: tuple[int, int] | None = None
     try:
         summary = plan_disclosure(
             source,
             include_dirty=include_dirty,
             dirty_allowlist=dirty_allowlist,
             prompt_only=False,
-            is_git=is_git_repo(source),
+            is_git=False,
         )
+        non_git_owner = _claim_destination(dest)
+        base = create_nongit_copy(source, dest)
+        # Re-scan the exact copied bytes, not only the mutable source tree.
+        plan_disclosure(dest, prompt_only=False, is_git=False)
     except DisclosureError as exc:
-        raise CloneError(str(exc)) from exc
-
-    if is_git_repo(source):
-        dirty = git_is_dirty(source)
-        allow = list(summary.included_dirty_paths) if (include_dirty or dirty_allowlist) else None
-        if dirty and not include_dirty and not dirty_allowlist:
+        if non_git_owner is not None and not _remove_partial_destination(
+            dest, non_git_owner
+        ):
             raise CloneError(
-                "source git checkout is dirty; refuse to launch Grok. "
-                "Pass repeatable --include-dirty-path PATH (explicit allowlist). "
-                "Bare --include-dirty is not accepted when nonignored dirty material "
-                "exists. Ignored paths are never copied."
-            )
-        create_git_clone(source, dest)
-        if dirty and (include_dirty or dirty_allowlist):
-            # Allowlist-only materialization; bare include_dirty with only ignored
-            # dirt yields a clean HEAD clone (plan_disclosure already refused
-            # nonignored bare --include-dirty).
-            if allow:
-                base = _apply_dirty_to_clone(source, dest, allowlist=allow)
-            else:
-                base = git_head(dest)
-            fp = source_state_fingerprint(source, allowlist=allow)
-            summary.base_sha = base
-            write_disclosure_summary(dest, summary)
-            return dest, base, fp, summary
-        summary.base_sha = git_head(dest)
-        write_disclosure_summary(dest, summary)
-        return dest, git_head(dest), None, summary
-
-    base = create_nongit_copy(source, dest)
+                "refusing partial workspace cleanup: destination ownership changed"
+            ) from exc
+        raise CloneError(str(exc)) from exc
+    except (CloneError, OSError, subprocess.SubprocessError) as exc:
+        if non_git_owner is not None and not _remove_partial_destination(
+            dest, non_git_owner
+        ):
+            raise CloneError(
+                "refusing partial workspace cleanup: destination ownership changed"
+            ) from exc
+        raise CloneError(f"non-git workspace copy failed; partial copy cleaned: {exc}") from exc
     summary.base_sha = base
     write_disclosure_summary(dest, summary)
     return dest, base, source_state_fingerprint(source), summary

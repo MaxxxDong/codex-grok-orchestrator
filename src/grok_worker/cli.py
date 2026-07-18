@@ -10,7 +10,7 @@ from grok_worker import cache_cmds, cli_cmds, session_cli
 
 app = typer.Typer(
     name="grok-worker",
-    help="Outer lifecycle runner for Grok ACP workers (foreground helper).",
+    help="Lifecycle runner for native Grok headless and ACP compatibility workers.",
     add_completion=False,
     no_args_is_help=True,
 )

@@ -7,16 +7,25 @@ description: Use when Codex should delegate bounded repository analysis, impleme
 
 Codex is always the dispatcher, reviewer, and decision owner. This skill is a foreground worker mechanism, not a daemon, scheduler, autonomous product, or replacement for user approval gates.
 
-Use only the lifecycle entry point `bin/grok-worker`. Do not invoke raw `acpx` or `grok-acp-worker` for repository work.
+Use only the lifecycle entry point `bin/grok-worker`. One-shot `run` defaults to
+native Grok Build headless. Do not invoke raw `grok`, `acpx`, or
+`grok-acp-worker` for repository work outside lifecycle diagnosis.
 
 ## Runtime defaults
 
 - Model comes from `GROK_WORKER_MODEL` and defaults to `grok-4.5`.
 - Reasoning comes from `GROK_WORKER_REASONING_EFFORT` and defaults to `high`.
 - Never Fast and never silently fall back to another model.
-- Every Worker runs with a managed `GROK_HOME` derived from the canonical Grok
-  model config. API keys remain environment-only, `Agents.md` stays linked, and
-  Grok-level plugins/MCP fail closed unless explicitly enabled after inspect.
+- Every Worker runs with an isolated runtime `HOME` and normal `~/.grok` layout
+  derived from the canonical model config. `GROK_HOME` override mode is not used
+  because Grok Build 0.2.103 loses reasoning/cache behavior there. API keys stay
+  environment-only, `Agents.md` stays linked, and plugins/MCP are disabled.
+- Profile reuse requires the same source profile, provider/model configuration,
+  and effort. Same model IDs on different endpoints never share a runtime home.
+- Native profiles explicitly declare the requested reasoning capability. If
+  Grok says it ignored the requested effort, the run fails and is retained.
+- The selected model also handles session summaries; do not restore the
+  incompatible built-in `grok-build` auxiliary route in relay-backed profiles.
 - Each Grok worker may run at most 3 subagents concurrently for independent work.
   Prefer read-only research, review, and test analysis. Never assign overlapping
   writes; the lead worker owns integration and the structured result contract.
@@ -25,7 +34,13 @@ Use only the lifecycle entry point `bin/grok-worker`. Do not invoke raw `acpx` o
 - Root Codex reviews every result and decides whether to integrate it.
 - A clone path is disposable runtime evidence, never a canonical project path. Project artifacts that need an absolute repository path must use `.grok-worker/lifecycle.json` → `source_realpath`; never persist `pwd` or `.grok-disposable/grok-worker-*` in README, HANDOFF, submission material, or generated source.
 
-Preflight: verify `acpx --version`, `grok --version`, `grok models`, repository path, available disk, and `grok-worker status`. At the start of a Root task, generate one opaque dispatcher ID and reuse it for every worker in that task through `GROK_WORKER_DISPATCHER_ID` or `--dispatcher-id`; never reuse that ID for a different Root task. Run a minimal live smoke test before a significant wave when there is no recent successful proof.
+Preflight: verify `grok --version`, `grok models`, repository path, available
+disk, and `grok-worker status`. Verify `acpx --version` only for `--backend acp`
+or named sessions. At the start of a Root task, generate one opaque dispatcher
+ID and reuse it for every worker in that task through
+`GROK_WORKER_DISPATCHER_ID` or `--dispatcher-id`; never reuse that ID for a
+different Root task. Run a minimal live smoke test before a significant wave
+when there is no recent successful proof.
 
 If all 10 slots for the current dispatcher are busy, do not preempt or replace workers. Wait for completion events for 30 seconds by default (explicit 0 is a poll; maximum one wait is 120 seconds), then retry the exact bounded task. A wait timeout means only “no matching event yet,” not Worker failure.
 
@@ -33,7 +48,11 @@ If all 10 slots for the current dispatcher are busy, do not preempt or replace w
 
 Use `run` for one bounded turn.
 
+`run` uses `--backend native` by default. Use `--backend acp` only for
+compatibility diagnosis or a known ACP-dependent integration.
+
 Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous iteration.
+Named sessions remain ACP-backed in v0.5.
 
 A named session may be reused only when all of these remain identical:
 
@@ -82,6 +101,7 @@ One-shot implementation:
 ```bash
 grok-worker run \
   --source "$REPO" \
+  --backend native \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
   --disposable-root "$DISPOSABLE_ROOT" \
   --artifact-root "$ARTIFACT_ROOT" \
@@ -94,12 +114,16 @@ One-shot read-only analysis/review:
 ```bash
 grok-worker run \
   --source "$REPO" \
+  --backend native \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
   --disposable-root "$DISPOSABLE_ROOT" \
   --artifact-root "$ARTIFACT_ROOT" \
   --mode analysis \
   --prompt-file "$PROMPT_FILE"
 ```
+
+Native analysis/research is enforced with Grok's OS `read-only` sandbox and
+`plan` permission mode; it is not merely a prompt instruction.
 
 Prompt-only research before a repository exists:
 
@@ -165,15 +189,24 @@ fields, config-apply rollback semantics, and authority boundaries.
 
 Optional one-shot controls:
 
+- `--backend native|acp`: native is the default; ACP requires `acpx`.
 - `--keep "REASON"`: explicit indefinite clone retention.
-- `--include-dirty-path PATH`: repeatable explicit allowlist for reviewed dirty paths. Bare `--include-dirty` is refused when real nonignored dirty material exists; ignored files are never copied.
+- Safe staged, unstaged, and untracked files are snapshotted automatically.
+  Ignored files are never copied. Sensitive paths/content and escaping symlinks
+  still fail closed. `--include-dirty` and `--include-dirty-path` are deprecated
+  compatibility inputs and are not required for ordinary dirt.
+- Legacy dirty allowlists no longer filter the snapshot. All safe nonignored
+  dirt is included, and the exact clone bytes are scanned again before launch.
+- A transient Git clone/dirty-baseline failure is cleaned, rescanned, and retried
+  once. Partial directories move to age-gated system-temp quarantine; do not
+  manually delete or reuse them.
 - `--prompt-only`: source-free analysis/research before a repository exists; rejects implementation and dirty/source flags.
 - `--cap-bytes 6442450944`: disposable clone-domain limit.
 - `--cache-max-bytes 10737418240`: independent shared-cache limit.
 - `--cache-ttl-hours 2160`: shared-cache TTL before LRU quota eviction.
 - `--timeout 1800` is a renewable inactivity lease, not a total lifetime.
   `--hard-timeout 86400` is the default absolute safety cap; pass 0 to disable it.
-  `lease-set` may adjust either value while the same ACP process is running.
+  `lease-set` may adjust either value while the same backend process is running.
 - `--task-id`, `--failure-retain-hours 24`.
 - `--no-prepare-deps`: explicit opt-out of shared dependency preparation.
 
@@ -187,6 +220,9 @@ Optional one-shot controls:
 - Before creation: reconcile dead workers, run eligible GC, enforce concurrency and capacity.
 - After creation: remeasure; if over cap, roll back only the new clone.
 - Unmarked legacy directories count toward capacity and are never deleted by ordinary GC.
+- A repository-root `.mcp.json` is hidden from both Grok discovery and Git status
+  only during backend execution. The exact original always wins on restore;
+  worker-created same-name content is quarantined under managed metadata.
 
 ### Shared cache
 
@@ -201,7 +237,12 @@ The cache is outside the disposable root and has its own default 10 GiB quota an
 
 Workers hold a shared cache-use lease. Cache GC requires an exclusive nonblocking lease and defers while any worker is using cache entries. If TTL then LRU cannot reduce usage below quota, new workers are refused before clone creation.
 
-Never create clone-local `.venv`. Python environments are fingerprinted shared environments under `venvs/`; uv, pip, npm, and Poetry caches use their shared buckets. A locked Python project uses one frozen `uv sync --frozen --all-groups --all-extras --no-install-project`, then workers run `uv run --no-sync`. Missing lockfiles fail closed unless dependency preparation is explicitly disabled.
+Never create clone-local `.venv`. Python environments are fingerprinted shared
+environments under `venvs/`; uv, pip, npm, and Poetry caches use their shared
+buckets. A locked Python project attempts one frozen dependency prewarm, then
+workers run with shared cache variables. Prewarm failure is recorded as a
+startup warning and does not prevent Grok from attempting the task; real task
+verification still determines success.
 
 ## Lifecycle and retention
 
@@ -215,7 +256,14 @@ Never create clone-local `.venv`. Python environments are fingerprinted shared e
 
 Dead creating/running/finalizing processes become failed with a new 24-hour deadline. `finalizing` is non-deletable. Never persist success before verified external artifacts exist.
 
-A successful implementation requires `acpx` exit 0 and a strict `.grok-output/result.json` with `task_completed=true`, `status=completed`, and at least one passing verification record. Analysis runs are permissioned read-only; when ACP exits 0 with a nonempty response but cannot write `.grok-output`, the lifecycle runner creates a clearly identified root-owned analysis result and retains the ACP response in `worker.log`. Analysis may have an empty verification list. Missing or empty analysis output, partial/failed results, and unverifiable implementation results are failures.
+A successful implementation requires backend exit 0 and a strict
+`.grok-output/result.json` with `task_completed=true`, `status=completed`, and at
+least one passing verification record. Analysis runs are permissioned read-only;
+when the backend exits 0 with a nonempty response but cannot write
+`.grok-output`, the lifecycle runner creates a clearly identified root-owned
+analysis result and retains the response in `worker.log`. Analysis may have an
+empty verification list. Missing/empty analysis output, partial/failed results,
+reasoning downgrade, and unverifiable implementation results are failures.
 
 ### Lifecycle / observability
 
@@ -242,7 +290,7 @@ A successful implementation requires `acpx` exit 0 and a strict `.grok-output/re
   `planning|editing|verifying|finalizing`; arbitrary worker-authored progress text
   is never surfaced. `phase` follows lifecycle state; illegal/future progress
   fails soft. Terminal elapsed is frozen; remaining is null. Resource PID prefers
-  `acpx_pid`.
+  `process_pid`; `acpx_pid` remains a v0.3/v0.4 compatibility alias.
 - **Early implementation checkpoint**: implementation/debug roles atomically write
   allowlisted `progress.json` plus a valid `status=partial`, `task_completed=false`
   result before extensive work, then atomically replace the result after real
@@ -277,7 +325,13 @@ Only delete a successful clone when:
 
 ## Cache observability
 
-Write per-turn metrics to `metrics/worker-runs.jsonl`. A cache ratio is observable only when provider output contains both input-token and cached-read-token values such as `cachedReadTokens` or `cached_tokens`. Stable prefixes, content-addressed context packs, and named session reuse are optimization mechanisms, not proof of a cache hit. Report unobservable metrics as unobservable.
+Write per-run metrics to `metrics/worker-runs.jsonl`. Native JSON output exposes
+input, cached-read, output, and reasoning tokens when Grok reports them. A cache
+ratio is observable only when provider output contains both input-token and
+cached-read-token values. Stable profiles/prefixes and named session reuse are
+optimization mechanisms, not proof of a cache hit; relay-side cache thresholds
+and eviction can still make identical calls miss. Report unobservable metrics as
+unobservable.
 
 ## Legacy and migration
 
@@ -307,7 +361,10 @@ On any Worker failure or malformed/missing artifact, Root first inspects lifecyc
 
 If evidence indicates a systemic defect, fix the Skill/runner/prompt at the shared seam and add a regression test before retrying the original task. Do not normalize repeated caller-side boilerplate or ad-hoc prompt workarounds when the invariant belongs in the Skill. Do not weaken the implementation validator or synthesize implementation success.
 
-After systemic repair: run a minimal live smoke with an ordinary task prompt that does not duplicate lifecycle JSON, then resume the original task. Fixed model (`grok-4.5`/`high`), no-Fast, and no-nested-worker policies remain unchanged.
+After systemic repair: run a minimal live smoke with an ordinary task prompt that
+does not duplicate lifecycle JSON, then resume the original task. The configured
+model/high policy, no-Fast policy, and maximum 3 non-overlapping subagents remain
+unchanged.
 
 ## Handoff
 

@@ -12,6 +12,7 @@ class TokenMetrics:
     input_tokens: int | None
     cached_tokens: int | None
     output_tokens: int | None
+    reasoning_tokens: int | None
     observable: bool
 
     @property
@@ -46,34 +47,99 @@ def extract_token_metrics(payload: object) -> TokenMetrics:
     for mapping in _walk(payload):
         input_tokens = _integer(mapping, ("inputTokens", "input_tokens"))
         output_tokens = _integer(mapping, ("outputTokens", "output_tokens"))
+        reasoning_tokens = _integer(mapping, ("reasoningTokens", "reasoning_tokens"))
         cached_tokens = _integer(
             mapping,
-            ("cachedReadTokens", "cachedTokens", "cached_tokens", "cached_read_tokens"),
+            (
+                "cachedReadTokens",
+                "cachedTokens",
+                "cached_tokens",
+                "cached_read_tokens",
+                "cache_read_input_tokens",
+            ),
         )
-        if input_tokens is not None or output_tokens is not None or cached_tokens is not None:
+        input_details = mapping.get("input_tokens_details")
+        if cached_tokens is None and isinstance(input_details, dict):
+            cached_tokens = _integer(input_details, ("cached_tokens",))
+        output_details = mapping.get("output_tokens_details")
+        if reasoning_tokens is None and isinstance(output_details, dict):
+            reasoning_tokens = _integer(output_details, ("reasoning_tokens",))
+        if any(
+            item is not None
+            for item in (input_tokens, output_tokens, cached_tokens, reasoning_tokens)
+        ):
             return TokenMetrics(
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
                 output_tokens=output_tokens,
+                reasoning_tokens=reasoning_tokens,
                 observable=input_tokens is not None and cached_tokens is not None,
             )
-    return TokenMetrics(None, None, None, False)
+    return TokenMetrics(None, None, None, None, False)
+
+
+def _metric_values(metrics: TokenMetrics) -> tuple[int | None, ...]:
+    return (
+        metrics.input_tokens,
+        metrics.cached_tokens,
+        metrics.output_tokens,
+        metrics.reasoning_tokens,
+    )
+
+
+def _embedded_json_metrics(text: str) -> TokenMetrics:
+    """Extract the richest complete JSON object embedded after log prefixes."""
+    decoder = json.JSONDecoder()
+    best = TokenMetrics(None, None, None, None, False)
+    best_score = 0
+    for index in (pos for pos in range(len(text) - 1, -1, -1) if text[pos] == "{"):
+        try:
+            payload, _end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            continue
+        metrics = extract_token_metrics(payload)
+        score = sum(value is not None for value in _metric_values(metrics))
+        if score > best_score:
+            best = metrics
+            best_score = score
+            if score == 4:
+                break
+    return best
 
 
 def extract_token_metrics_from_text(text: str) -> TokenMetrics:
     """Find the latest token-bearing JSON object in an ACP JSON-lines log."""
+    try:
+        whole_payload: object = json.loads(text)
+    except json.JSONDecodeError:
+        whole_payload = None
+    if whole_payload is not None:
+        whole_metrics = extract_token_metrics(whole_payload)
+        if any(value is not None for value in _metric_values(whole_metrics)):
+            return whole_metrics
+        if isinstance(whole_payload, dict):
+            nested = whole_payload.get("agent_output")
+            if isinstance(nested, str) and nested != text:
+                nested_metrics = extract_token_metrics_from_text(nested)
+                if any(value is not None for value in _metric_values(nested_metrics)):
+                    return nested_metrics
     for line in reversed(text.splitlines()):
         try:
             payload: object = json.loads(line)
         except json.JSONDecodeError:
             continue
         metrics = extract_token_metrics(payload)
-        if any(
-            value is not None
-            for value in (metrics.input_tokens, metrics.cached_tokens, metrics.output_tokens)
-        ):
+        if any(value is not None for value in _metric_values(metrics)):
             return metrics
-    return TokenMetrics(None, None, None, False)
+        if isinstance(payload, dict):
+            # Finalized worker logs wrap native Grok's JSON output in the
+            # ``agent_output`` string. Parse that nested JSON-lines stream too.
+            nested = payload.get("agent_output")
+            if isinstance(nested, str) and nested != text:
+                nested_metrics = extract_token_metrics_from_text(nested)
+                if any(value is not None for value in _metric_values(nested_metrics)):
+                    return nested_metrics
+    return _embedded_json_metrics(text)
 
 
 def append_metric(path: Path, record: dict[str, object], metrics: TokenMetrics) -> None:

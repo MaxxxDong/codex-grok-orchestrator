@@ -1,7 +1,8 @@
-"""Run configuration, outcome, and acpx command construction."""
+"""Run configuration, outcome, and backend command construction."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
@@ -48,6 +49,10 @@ class RunConfig:
     dispatcher_id: str | None = None
     run_id: str | None = None
     prompt_only: bool = False
+    # Library callers keep the v0.4 ACP default. The public `run` CLI passes
+    # native explicitly, so existing embedded callers do not start real Grok
+    # unexpectedly during an upgrade.
+    backend: str = "acp"
 
     def __post_init__(self) -> None:
         if not self.model:
@@ -56,6 +61,8 @@ class RunConfig:
             self.reasoning_effort = default_reasoning_effort()
         if self.include_dirty_paths is None:
             self.include_dirty_paths = []
+        if self.backend not in {"native", "acp"}:
+            raise ValueError("backend must be native or acp")
 
 
 @dataclass
@@ -112,4 +119,41 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
     else:
         cmd.append("--approve-all")
     cmd.extend(["exec", prompt])
+    return cmd
+
+
+def default_grok_bin() -> str:
+    configured = os.environ.get("GROK_WORKER_GROK_BIN")
+    if configured:
+        return configured
+    configured = which("grok")
+    if configured:
+        return configured
+    raise FileNotFoundError("cannot locate grok; install Grok Build or set PATH")
+
+
+def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str]:
+    read_only = cfg.mode in {"analysis", "research"}
+    cmd = [
+        default_grok_bin(),
+        "--cwd",
+        str(clone),
+        "--sandbox",
+        "read-only" if read_only else "workspace",
+    ]
+    if read_only:
+        cmd.extend(["--permission-mode", "plan"])
+    else:
+        cmd.append("--always-approve")
+    cmd.extend(
+        [
+            "--model",
+            cfg.model,
+            "--reasoning-effort",
+            cfg.reasoning_effort,
+        ]
+    )
+    if not cfg.allow_subagents:
+        cmd.append("--no-subagents")
+    cmd.extend(["--output-format", "json", "--prompt-file", str(prompt_file)])
     return cmd

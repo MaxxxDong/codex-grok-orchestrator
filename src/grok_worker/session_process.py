@@ -13,11 +13,11 @@ from grok_worker.cache_policy import (
     cache_use_lease,
 )
 from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_CAP_BYTES, DEFAULT_HARD_TIMEOUT
-from grok_worker.deps import prepare_shared_env
-from grok_worker.grok_profile import scoped_worker_grok_home
+from grok_worker.deps import DepsError, prepare_shared_env
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
+from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.run_config import default_agent_bin
 from grok_worker.session_commands import build_ensure_cmd, build_prompt_cmd
 from grok_worker.session_state import SessionState, permission_signature, session_state_path
@@ -145,12 +145,21 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
     )
     env["GROK_WORKER_LIFECYCLE"] = "1"
     env["GROK_WORKER_TASK_ID"] = state.task_id
-    env["GROK_WORKER_GROK_HOME"] = str(scoped_worker_grok_home(clone, env))
+    env["GROK_WORKER_RUNTIME_HOME"] = str(
+        cfg.shared_cache_root / "grok-runtime-home"
+    )
     lease = cache_use_lease(cfg.shared_cache_root)
-    with worker_lock(meta_dir(clone)), lease:
+    with worker_lock(meta_dir(clone)), lease, isolate_project_mcp(
+        clone, meta_dir(clone)
+    ):
         dep_env: dict[str, str] = {}
         if cfg.prepare_deps:
-            dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
+            try:
+                dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
+            except DepsError as exc:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"[grok-worker] warning: dependency prewarm skipped: {exc}\n")
         env.update(dep_env)
         common = common_command(cfg, clone)
         initialize_lease(

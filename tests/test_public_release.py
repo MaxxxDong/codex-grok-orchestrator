@@ -136,6 +136,38 @@ def test_agent_can_explicitly_disable_subagents(monkeypatch) -> None:  # type: i
     assert "--no-subagents" in command
 
 
+def test_native_command_uses_configured_grok_binary(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "/opt/tools/custom-grok")
+
+    from grok_worker.run_config import default_grok_bin
+
+    assert default_grok_bin() == "/opt/tools/custom-grok"
+
+
+def test_native_analysis_is_os_sandboxed_read_only(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
+    from grok_worker.run_config import RunConfig, build_native_cmd
+
+    analysis = build_native_cmd(
+        RunConfig(source=tmp_path, prompt="review", backend="native", mode="analysis"),
+        tmp_path,
+        tmp_path / "prompt.md",
+    )
+    implementation = build_native_cmd(
+        RunConfig(source=tmp_path, prompt="edit", backend="native", mode="implementation"),
+        tmp_path,
+        tmp_path / "prompt.md",
+    )
+
+    assert analysis[analysis.index("--sandbox") + 1] == "read-only"
+    assert analysis[analysis.index("--permission-mode") + 1] == "plan"
+    assert "--always-approve" not in analysis
+    assert implementation[implementation.index("--sandbox") + 1] == "workspace"
+    assert "--always-approve" in implementation
+
+
 def test_packaged_prompts_load_without_repository_assets() -> None:
     from grok_worker.prompt_cache import Role, _load_base_and_role
 
@@ -176,7 +208,7 @@ def test_release_notes_cover_current_public_release() -> None:
     text = (ROOT / "docs" / "releases" / "release-notes.md").read_text(encoding="utf-8")
 
     assert "2026-07-19" in text
-    assert "0.4.2" in text
+    assert "0.5.0" in text
     assert "codex-grok-orchestrator" in text
     assert "grok-worker" in text
     assert "changes.patch" in text

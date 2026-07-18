@@ -65,6 +65,10 @@ def inspect_clone_health(meta: WorkerMeta, clone: Path) -> dict[str, Any]:
         "active": active,
         "runner_pid": meta.runner_pid,
         "runner_live": runner_live,
+        "backend": meta.backend,
+        "process_pid": meta.acpx_pid,
+        "process_live": acpx_live,
+        # Compatibility aliases retained for v0.3/v0.4 consumers.
         "acpx_pid": meta.acpx_pid,
         "acpx_live": acpx_live,
         "resources": resources,

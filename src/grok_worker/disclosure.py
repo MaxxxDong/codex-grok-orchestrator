@@ -195,6 +195,41 @@ def _symlink_escapes(source: Path, rel: str) -> bool:
     return False
 
 
+def _material_risk(source: Path, rel: str) -> str | None:
+    """Return a disclosure risk for the exact material currently at *rel*."""
+    if _path_is_absent(source, rel):
+        return None
+    if _symlink_escapes(source, rel):
+        return "symlink_escape"
+    partial = ""
+    for part in Path(rel).parts[:-1]:
+        partial = f"{partial}/{part}" if partial else part
+        if (source / partial).is_symlink() and _symlink_escapes(source, partial):
+            return "symlink_escape"
+    sensitive = _is_sensitive_rel(rel)
+    if sensitive:
+        return sensitive
+    path = source / rel
+    if path.is_file() and not path.is_symlink():
+        return _scan_content_for_secrets(path)
+    return None
+
+
+def validate_materialized_paths(root: Path, paths: Sequence[str]) -> None:
+    """Recheck the exact clone bytes after dirty materialization.
+
+    This closes the scan/copy race: source files may change after planning, but
+    only the already-isolated clone bytes can reach the worker.
+    """
+    reasons = [risk for rel in paths if (risk := _material_risk(root, rel))]
+    if reasons:
+        raise DisclosureError(
+            "materialized dirty snapshot refused: high-confidence sensitive "
+            "path/content or symlink escape; secret values are never logged",
+            reason_codes=sorted(set(reasons)),
+        )
+
+
 def _git_is_ignored(repo: Path, rel: str) -> bool:
     """Return whether *rel* is ignored.
 
@@ -400,67 +435,28 @@ def plan_disclosure(
         return summary
 
     dirty_paths, ignored_sample = inventory_git_dirty(source)
-    if not include_dirty and not allowlist:
-        if dirty_paths:
-            raise DisclosureError(
-                "source git checkout is dirty; refuse to launch Grok. "
-                "Pass repeatable --include-dirty-path PATH for an explicit allowlist. "
-                "Legacy bare --include-dirty is not accepted when nonignored dirty "
-                "material exists. Ignored paths (e.g. .env) are never copied.",
-                reason_codes=["dirty_requires_opt_in"],
-            )
+    if not dirty_paths:
         summary.risk_decision = "allow"
         summary.reason_codes = ["clean_head"]
         return summary
 
-    # P0: bare --include-dirty must not materialize all nonignored dirt.
-    if include_dirty and not allowlist:
-        if dirty_paths:
-            summary.risk_decision = "refuse"
-            summary.excluded_count = len(ignored_sample)
-            summary.reason_codes = ["legacy_include_dirty_requires_allowlist"]
-            raise DisclosureError(
-                "legacy bare --include-dirty must not materialize all nonignored dirty "
-                "paths. Pass repeatable --include-dirty-path PATH for each repository-"
-                "relative file to include (renames may need both old and new paths). "
-                "Ignored-only material remains excluded and is never copied.",
-                reason_codes=["legacy_include_dirty_requires_allowlist"],
-            )
-        # Only ignored dirt (or empty after filters): safe clean HEAD path.
+    summary.include_dirty = True
+    if not allowlist:
+        summary.reason_codes.append("auto_safe_dirty_snapshot")
         if ignored_sample:
             summary.reason_codes.append("ignored_excluded")
             summary.excluded_count += len(ignored_sample)
-        summary.risk_decision = "allow"
-        summary.reason_codes = sorted(set(summary.reason_codes + ["clean_head_ignored_only"]))
-        return summary
-
-    candidates: list[str]
-    if allowlist:
-        dirty_set = set(dirty_paths)
-        candidates = []
-        for rel in allowlist:
-            if rel in dirty_set:
-                candidates.append(rel)
-                continue
-            if (source / rel).exists() or (source / rel).is_symlink():
-                if rel not in dirty_set:
-                    raise DisclosureError(
-                        f"include-dirty-path not dirty or missing from planned set: {rel}",
-                        reason_codes=["path_not_dirty"],
-                    )
-            else:
-                # Deleted tracked paths are "dirty" without existing on disk.
-                if rel not in dirty_set:
-                    raise DisclosureError(
-                        f"include-dirty-path not dirty or missing from planned set: {rel}",
-                        reason_codes=["path_not_dirty"],
-                    )
-            candidates.append(rel)
-        summary.excluded_count += max(0, len(dirty_set) - len(set(candidates)))
-        if dirty_set - set(candidates):
-            summary.reason_codes.append("allowlist_filtered")
     else:
-        candidates = list(dirty_paths)
+        dirty_set = set(dirty_paths)
+        stale_count = len([rel for rel in allowlist if rel not in dirty_set])
+        summary.excluded_count += stale_count
+        if stale_count:
+            summary.reason_codes.append("stale_allowlist_ignored")
+        summary.reason_codes.append("legacy_allowlist_nonfiltering")
+
+    # v0.5 snapshots every safe dirty path. The old allowlist is accepted for
+    # script compatibility but no longer creates an incomplete worker baseline.
+    candidates = list(dirty_paths)
 
     included: list[str] = []
     blocked = 0
@@ -473,36 +469,11 @@ def plan_disclosure(
         if _path_is_absent(source, rel):
             included.append(rel)
             continue
-        if _symlink_escapes(source, rel):
+        risk = _material_risk(source, rel)
+        if risk:
             blocked += 1
-            summary.reason_codes.append("symlink_escape")
+            summary.reason_codes.append(risk)
             continue
-        # Also inspect parent path components that are directory symlinks.
-        parts = Path(rel).parts
-        partial = ""
-        escape = False
-        for p in parts[:-1]:
-            partial = f"{partial}/{p}" if partial else p
-            if (source / partial).is_symlink() and _symlink_escapes(source, partial):
-                escape = True
-                break
-        if escape:
-            blocked += 1
-            summary.reason_codes.append("symlink_escape")
-            continue
-        sens = _is_sensitive_rel(rel)
-        fp = source / rel
-        if sens:
-            # Path-shaped secret: refuse without needing content (templates exempt).
-            blocked += 1
-            summary.reason_codes.append(sens)
-            continue
-        if fp.is_file() and not fp.is_symlink():
-            content_hit = _scan_content_for_secrets(fp)
-            if content_hit:
-                blocked += 1
-                summary.reason_codes.append(content_hit)
-                continue
         included.append(rel)
 
     summary.included_dirty_paths = sorted(set(included))

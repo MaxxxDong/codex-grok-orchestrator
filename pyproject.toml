@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grok-worker"
-version = "0.4.2"
-description = "Lifecycle-managed, isolated Grok ACP workers with verifiable artifacts"
+version = "0.5.0"
+description = "Lifecycle-managed, isolated Grok workers with native and ACP backends"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
