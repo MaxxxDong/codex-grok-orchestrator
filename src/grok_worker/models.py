@@ -125,6 +125,17 @@ class WorkerMeta:
     # Optional timeout recorded at lifecycle creation for status remaining_seconds.
     # Absent on older metadata → status reports null (backward compatible).
     timeout_seconds: int | None = None
+    # Unique per execution; used for completion-event dedup with state.
+    run_id: str | None = None
+    # Explicit dispatcher scope for cross-root concurrency (optional).
+    dispatcher_id: str | None = None
+    # analysis | implementation | prompt-only research marker
+    mode: str | None = None
+    # native (Grok Build headless) or acp (acpx compatibility backend)
+    backend: str | None = None
+    # Structured disclosure summary (values/content/prompt/env-free). Survives
+    # successful clone deletion because lifecycle is copied into worker.log.
+    disclosure_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -164,6 +175,11 @@ class WorkerMeta:
             source_state_fingerprint=data.get("source_state_fingerprint"),
             interrupted=bool(data.get("interrupted", False)),
             timeout_seconds=_optional_int(data.get("timeout_seconds")),
+            run_id=_optional_str(data.get("run_id")),
+            dispatcher_id=_optional_str(data.get("dispatcher_id")),
+            mode=_optional_str(data.get("mode")),
+            backend=_optional_str(data.get("backend")),
+            disclosure_summary=_optional_disclosure(data.get("disclosure_summary")),
         )
 
     @classmethod
@@ -189,6 +205,46 @@ def _optional_int(value: Any) -> int | None:
     if isinstance(value, float) and value.is_integer():
         return int(value)
     return None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value if value else None
+    return None
+
+
+def _optional_disclosure(value: Any) -> dict[str, Any] | None:
+    """Accept only a plain dict of scalar/list summary fields (no nested secrets)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return None
+    # Shallow copy; never invent content. Callers must pass values/content-free summaries.
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if item is None or isinstance(item, (str, int, float, bool)):
+            out[key] = item
+        elif isinstance(item, list):
+            # Only lists of scalars/strings (e.g. included_dirty_paths, reason_codes).
+            cleaned: list[Any] = []
+            for el in item:
+                if el is None or isinstance(el, (str, int, float, bool)):
+                    cleaned.append(el)
+            out[key] = cleaned
+        elif isinstance(item, dict):
+            # Nested plain maps of scalars only (defensive).
+            nested: dict[str, Any] = {}
+            for nk, nv in item.items():
+                if isinstance(nk, str) and (
+                    nv is None or isinstance(nv, (str, int, float, bool))
+                ):
+                    nested[nk] = nv
+            out[key] = nested
+    return out if out else None
 
 
 def meta_is_trusted(meta: WorkerMeta) -> bool:

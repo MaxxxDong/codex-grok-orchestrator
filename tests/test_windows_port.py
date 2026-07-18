@@ -240,7 +240,7 @@ def test_windows_metadata_failure_reaps_started_acpx(
             return 143 if self.terminated else 0
 
     child = FakeChild()
-    monkeypatch.setattr("grok_worker.worker_exec.subprocess.Popen", lambda *a, **k: child)
+    monkeypatch.setattr("grok_worker.activity_lease.subprocess.Popen", lambda *a, **k: child)
     monkeypatch.setattr("grok_worker.worker_exec.subprocess.run", lambda *a, **k: object())
     monkeypatch.setattr("grok_worker.worker_exec.process_start_token", lambda _pid: "token")
 

@@ -99,6 +99,8 @@ def convert_dead_worker(
             artifact_path=meta.artifact_path,
             shared_cache_root=root,
             timestamp=meta.updated_at or None,
+            run_id=meta.run_id,
+            dispatcher_id=meta.dispatcher_id,
         )
     return meta
 
@@ -107,15 +109,32 @@ convert_dead_running = convert_dead_worker
 
 
 def is_active(meta: WorkerMeta, clone: Path) -> bool:
-    """Active if lock held, or live process identity matches."""
+    """Active if lock held, or live process identity matches.
+
+    Idle ``session_open`` does **not** permanently reserve concurrency capacity.
+    Max concurrent workers means active Grok invocations/processes only; named
+    sessions acquire a transient dispatcher slot around each ACP turn.
+    A session_open clone is still treated as non-reclaimable for GC safety
+    while the worker lock is held or a live process identity matches.
+    """
     if _worker_lock_held(clone):
         return True
     if meta.state not in (
         WorkerState.RUNNING,
         WorkerState.CREATING,
         WorkerState.FINALIZING,
+        WorkerState.SESSION_OPEN,
     ):
         return False
+    if meta.state == WorkerState.SESSION_OPEN:
+        # Protect clone from GC while open; does not count toward capacity budget.
+        # Only live process identities or a held worker lock mark it "active".
+        if process_matches(meta.runner_pid, meta.runner_start_token):
+            return True
+        if process_matches(meta.acpx_pid, meta.acpx_start_token):
+            return True
+        # Still protect idle open sessions from automatic GC deletion.
+        return True
     if process_matches(meta.runner_pid, meta.runner_start_token):
         return True
     if process_matches(meta.acpx_pid, meta.acpx_start_token):

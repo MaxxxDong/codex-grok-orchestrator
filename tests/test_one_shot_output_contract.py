@@ -73,6 +73,12 @@ def _assert_implementation_contract(prompt: str) -> None:
     assert any(marker in lower for marker in findings_shape_markers), (
         "implementation contract must define nonempty findings entries as JSON objects"
     )
+    assert ".grok-worker/progress.json" in prompt
+    assert all(step in lower for step in ("planning", "editing", "verifying", "finalizing"))
+    assert "task_completed" in lower and "false" in lower
+    assert 'status": "partial"' in lower or 'status: "partial"' in lower
+    assert "atomic" in lower and ("rename" in lower or "replace" in lower)
+    assert "before extensive" in lower or "before editing" in lower
 
 
 def test_one_shot_implementation_prompt_includes_base_role_and_output_contract() -> None:
@@ -210,7 +216,16 @@ def test_one_shot_prompt_rejects_unsupported_mode() -> None:
     from grok_worker.prompt_cache import build_one_shot_prompt
 
     with pytest.raises((ValueError, KeyError)):
-        build_one_shot_prompt(SKILL_ROOT, "research", TASK_IMPL)
+        build_one_shot_prompt(SKILL_ROOT, "not-a-real-mode", TASK_IMPL)
+
+
+def test_one_shot_research_mode_is_prompt_only_readonly() -> None:
+    from grok_worker.prompt_cache import build_one_shot_prompt
+
+    prompt = build_one_shot_prompt(SKILL_ROOT, "research", "Investigate X")
+    assert "Role: research" in prompt
+    assert "Role: implement" not in prompt
+    _assert_no_terminal_analysis_guidance(prompt)
 
 
 def test_execute_worker_passes_injected_one_shot_prompt_to_acp(

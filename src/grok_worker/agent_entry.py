@@ -10,6 +10,12 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from grok_worker.grok_profile import (
+    GrokProfileError,
+    isolated_child_environment,
+    prepare_isolated_profile,
+    validate_isolated_profile,
+)
 from grok_worker.process_launch import hidden_startup_info
 from grok_worker.settings import default_model, default_reasoning_effort, env_flag, env_text
 
@@ -38,12 +44,13 @@ def build_command() -> list[str]:
         grok_bin,
         "--sandbox",
         env_text("GROK_WORKER_SANDBOX", "workspace"),
+        "--always-approve",
         "--model",
         default_model(),
         "--reasoning-effort",
         default_reasoning_effort(),
     ]
-    if not env_flag("GROK_WORKER_ALLOW_SUBAGENTS", default=False):
+    if not env_flag("GROK_WORKER_ALLOW_SUBAGENTS", default=True):
         command.append("--no-subagents")
     leader_socket = os.environ.get("GROK_WORKER_LEADER_SOCKET") or str(
         Path(tempfile.gettempdir()) / f"grok-worker-{os.getpid()}.sock"
@@ -73,13 +80,25 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
+        profile = prepare_isolated_profile(
+            model_id=default_model(),
+            reasoning_effort=default_reasoning_effort(),
+        )
+        child_env = isolated_child_environment(_child_environment(), profile)
+        validate_isolated_profile(
+            grok_bin=command[0],
+            profile=profile,
+            environ=child_env,
+            cwd=Path.cwd(),
+            allow_extensions=env_flag("GROK_WORKER_ALLOW_GROK_EXTENSIONS", default=False),
+        )
         completed = subprocess.run(
             command,
+            env=child_env,
             check=False,
-            env=_child_environment(),
             startupinfo=hidden_startup_info(),
         )
-    except (OSError, ValueError) as exc:
+    except (GrokProfileError, OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
     finally:

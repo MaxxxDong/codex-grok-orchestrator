@@ -16,6 +16,9 @@ def test_wrapper_policy_contents() -> None:
     assert "GROK_WORKER_MODEL" in entry or "default_model" in entry
     assert "GROK_WORKER_ALLOW_SUBAGENTS" in entry
     assert "--no-subagents" in entry
+    assert "--always-approve" in entry
+    assert "prepare_isolated_profile" in entry
+    assert "validate_isolated_profile" in entry
     assert "grok_worker.agent_entry" in wrapper
 
 

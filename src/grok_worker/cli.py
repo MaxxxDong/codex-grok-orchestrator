@@ -6,19 +6,22 @@ import sys
 
 import typer
 
-from grok_worker import cache_cmds, cli_cmds, runtime_cli, session_cli
+from grok_worker import __version__, cache_cmds, cli_cmds, runtime_cli, session_cli
 
 app = typer.Typer(
     name="grok-worker",
-    help="Outer lifecycle runner for Grok ACP workers (foreground helper).",
+    help="Lifecycle runner for native Grok headless and ACP compatibility workers.",
     add_completion=False,
     no_args_is_help=True,
+    invoke_without_command=True,
 )
 
 app.command("run")(cli_cmds.cmd_run)
 app.command("gc")(cli_cmds.cmd_gc)
 app.command("status")(cli_cmds.cmd_status)
 app.command("events")(cli_cmds.cmd_events)
+app.command("health")(cli_cmds.cmd_health)
+app.command("lease-set")(cli_cmds.cmd_lease_set)
 app.command("config-apply")(cli_cmds.cmd_config_apply)
 app.command("import-legacy")(cli_cmds.cmd_import_legacy)
 app.command("list-legacy")(cli_cmds.cmd_list_legacy)
@@ -29,6 +32,15 @@ app.command("acpx-runtime-status")(runtime_cli.cmd_acpx_runtime_status)
 app.command("session-start")(session_cli.cmd_session_start)
 app.command("session-followup")(session_cli.cmd_session_followup)
 app.command("session-finalize")(session_cli.cmd_session_finalize)
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(False, "--version", is_eager=True, help="Show version and exit."),
+) -> None:
+    if version:
+        typer.echo(__version__)
+        raise typer.Exit()
 
 
 def main(argv: list[str] | None = None) -> int:

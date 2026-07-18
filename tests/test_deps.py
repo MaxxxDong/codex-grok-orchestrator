@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from unittest import mock
@@ -194,7 +195,7 @@ def test_frozen_failure_no_retry(tmp_path: Path) -> None:
                 prepare_shared_env(source, shared)
 
 
-def test_deps_hard_failure_prevents_acpx(
+def test_deps_prewarm_failure_warns_and_still_invokes_backend(
     git_source: Path, tmp_roots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import subprocess
@@ -202,11 +203,17 @@ def test_deps_hard_failure_prevents_acpx(
     _write_pyproject(git_source)
     subprocess.run(["git", "add", "-A"], cwd=git_source, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "deps"], cwd=git_source, check=True, capture_output=True)
-    never = tmp_roots["root"] / "bin" / "never-acpx"
+    never = tmp_roots["root"] / "bin" / ("never-acpx.cmd" if os.name == "nt" else "never-acpx")
     never.parent.mkdir(parents=True, exist_ok=True)
     invoked_marker = tmp_roots["root"] / "acpx-was-invoked"
-    never.write_text(f"#!/bin/sh\ntouch {invoked_marker}\nexit 99\n", encoding="utf-8")
-    never.chmod(0o755)
+    if os.name == "nt":
+        never.write_text(
+            f'@echo off\r\ntype nul > "{invoked_marker}"\r\nexit /b 99\r\n',
+            encoding="utf-8",
+        )
+    else:
+        never.write_text(f"#!/bin/sh\ntouch {invoked_marker}\nexit 99\n", encoding="utf-8")
+        never.chmod(0o755)
 
     def boom(*a, **k):  # type: ignore[no-untyped-def]
         raise DepsError("sync failed hard")
@@ -225,9 +232,14 @@ def test_deps_hard_failure_prevents_acpx(
                 skip_post_gc=True,
             )
         )
-    assert not invoked_marker.exists()
+    assert invoked_marker.exists()
     assert outcome.state == "failed"
-    assert "deps prepare failed" in (outcome.message or "")
+    assert "deps prepare failed" not in (outcome.message or "")
+    assert outcome.artifact_path is not None
+    worker_log = Path(outcome.artifact_path, "worker.log").read_text(
+        encoding="utf-8"
+    )
+    assert "dependency prewarm skipped" in worker_log
 
 
 def test_no_local_env_detection(tmp_path: Path) -> None:

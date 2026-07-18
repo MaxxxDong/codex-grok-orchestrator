@@ -21,10 +21,19 @@ _WINDOWS_LOCK_OFFSET = 0x7FFF_FFFF
 
 
 def _open_lock_file(path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise RuntimeError("refusing symlink lock path")
     flags = os.O_RDWR | os.O_CREAT
     if sys.platform == "win32":
         flags |= getattr(os, "O_BINARY", 0)
-    return os.open(str(path), flags, 0o644)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        return os.open(str(path), flags, 0o644)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EEXIST} or path.is_symlink():
+            raise RuntimeError("refusing symlink lock path") from exc
+        raise
 
 
 def _try_lock_fd(fd: int, *, shared: bool) -> None:
@@ -115,7 +124,6 @@ class FileLock:
     _fd: int | None = None
 
     def acquire(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = _open_lock_file(self.path)
         try:
             while True:
@@ -131,7 +139,6 @@ class FileLock:
 
     def try_acquire(self) -> bool:
         """Non-blocking acquire. True if held by caller."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = _open_lock_file(self.path)
         try:
             _try_lock_fd(fd, shared=self.shared)

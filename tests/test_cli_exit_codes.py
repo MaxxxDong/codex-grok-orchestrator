@@ -8,6 +8,7 @@ from unittest import mock
 
 import pytest
 
+from grok_worker import __version__
 from grok_worker.cli import main
 from grok_worker.run_config import RunConfig
 from tests.conftest import init_git_repo
@@ -34,11 +35,13 @@ def test_invalid_mode_returns_nonzero(tmp_path: Path) -> None:
     assert code != 0, f"expected nonzero exit for invalid mode, got {code}"
 
 
-def test_dirty_source_refusal_returns_nonzero(tmp_path: Path) -> None:
-    """Dirty source preflight refusal must exit nonzero through main()."""
+def test_sensitive_dirty_source_refusal_returns_nonzero(tmp_path: Path) -> None:
+    """Secret-shaped dirty source material must still fail before backend launch."""
     source = tmp_path / "source"
     init_git_repo(source)
-    (source / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+    (source / ".env").write_text(
+        "API_KEY=abcdefghijklmnop123456\n", encoding="utf-8"
+    )
     code = main(
         [
             "run",
@@ -76,6 +79,8 @@ def test_run_cli_passes_configurable_worker_limit(tmp_path: Path) -> None:
             clone_path=None,
             artifact_path=str(tmp_path / "artifacts"),
             message="ok",
+            run_id=None,
+            dispatcher_id=None,
         )
 
     with mock.patch("grok_worker.cli_cmds.run_worker", side_effect=fake_run):
@@ -130,3 +135,9 @@ def test_session_start_cli_passes_configurable_worker_limit(tmp_path: Path) -> N
 
     assert code == 0
     assert seen == [24]
+
+
+def test_version_returns_package_version(capsys) -> None:
+    code = main(["--version"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == __version__
