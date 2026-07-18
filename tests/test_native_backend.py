@@ -164,6 +164,7 @@ def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
         capture_output=True,
     )
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("GROK_WORKER_SOURCE_GROK_HOME", str(source_home))
 
     outcome = run_worker(
@@ -218,6 +219,7 @@ def test_native_backend_rejects_reasoning_downgrade(
     fake = _fake_grok(tmp_roots["root"] / "bin", downgrade_reasoning=True)
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("GROK_WORKER_SOURCE_GROK_HOME", str(source_home))
 
     outcome = run_worker(
