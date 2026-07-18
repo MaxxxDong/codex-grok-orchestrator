@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from grok_worker import __version__
 from grok_worker.cli import main
 from tests.conftest import init_git_repo
 
@@ -59,3 +60,9 @@ def test_help_returns_zero() -> None:
     """Normal help path must still exit 0."""
     code = main(["--help"])
     assert code == 0
+
+
+def test_version_returns_package_version(capsys) -> None:
+    code = main(["--version"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == __version__

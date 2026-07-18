@@ -82,6 +82,7 @@ ln -sfn "$HOME/.codex/skills/grok-worker/bin/grok-acp-worker" \
 
 ```bash
 grok --version
+grok-worker --version
 grok models
 grok-worker --help
 grok-worker run --help
