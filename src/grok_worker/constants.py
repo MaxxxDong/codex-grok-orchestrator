@@ -21,7 +21,8 @@ MAX_TASK_ID_LEN = 64
 
 # Completion-event wait bounds (caller may repeat; not a worker timeout).
 DEFAULT_EVENT_WAIT_SECONDS = 30
-MAX_EVENT_WAIT_SECONDS = 120
+DEFAULT_WATCH_WAIT_SECONDS = 300
+MAX_EVENT_WAIT_SECONDS = 600
 
 # Diagnostic-only health inspection interval (read-only; never terminates).
 HEALTH_INSPECT_INTERVAL_SECONDS = 300

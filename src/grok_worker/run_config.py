@@ -163,8 +163,8 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
 
 
 def default_one_shot_backend() -> str:
-    """Use the proven managed ACP tool chain by default on native Windows."""
-    return "acp" if sys.platform == "win32" else "native"
+    """Use Grok Build's native headless backend for one-shot work."""
+    return "native"
 
 
 def default_grok_bin() -> str:

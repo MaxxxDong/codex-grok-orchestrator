@@ -101,12 +101,12 @@ def test_windows_agent_path_uses_forward_slashes_for_acpx(tmp_path: Path) -> Non
     assert value.endswith("/agent.exe")
 
 
-def test_windows_defaults_one_shot_to_managed_acp_with_json_receipts(
+def test_windows_defaults_one_shot_to_native_and_keeps_acp_json_receipts(
     tmp_path: Path,
 ) -> None:
     cfg = RunConfig(source=tmp_path, prompt="test", model="test-model", acpx_bin="acpx")
     command = build_acpx_cmd(cfg, tmp_path, "agent", "prompt")
-    assert default_one_shot_backend() == "acp"
+    assert default_one_shot_backend() == "native"
     assert command[command.index("--format") + 1] == "json"
     assert "--json-strict" in command
 
@@ -372,9 +372,11 @@ dependencies = []
                     str(disposable),
                     "--artifact-root",
                     str(artifacts),
-                    "--shared-cache-root",
-                    str(shared),
-                    "--acpx-bin",
+                        "--shared-cache-root",
+                        str(shared),
+                        "--backend",
+                        "acp",
+                        "--acpx-bin",
                     str(fake),
                     "--max-workers",
                     "8",

@@ -48,7 +48,10 @@ _PRIVATE_KEY_HEADER_RE = re.compile(
     rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
 )
 _TOKEN_LINE_RE = re.compile(
-    rb"(?i)(?:api[_-]?key|secret|token|password|authorization)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"
+    rb"(?i)(?:api[_-]?key|secret|token|password|authorization)\s*[:=]\s*(?:"
+    rb"['\"][A-Za-z0-9_\-]{16,}|"
+    rb"(?=[A-Za-z0-9_\-]{20,}(?:\s|$))(?=[A-Za-z0-9_\-]*[\d-])[A-Za-z0-9_\-]{20,}"
+    rb")"
 )
 
 # Content scan size cap (bytes) for dirty candidates only.
@@ -58,8 +61,19 @@ _CONTENT_SCAN_LIMIT = 64 * 1024
 class DisclosureError(RuntimeError):
     """Raised when disclosure policy refuses materialization."""
 
-    def __init__(self, message: str, *, reason_codes: Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_codes: Sequence[str] | None = None,
+        blocked_items: Sequence[tuple[str, str]] | None = None,
+    ) -> None:
         self.reason_codes = list(reason_codes or [])
+        # Relative paths and rule codes only. Never include matched values/content.
+        self.blocked_items = [
+            {"path": str(path), "reason_code": str(reason)}
+            for path, reason in (blocked_items or ())
+        ]
         super().__init__(message)
 
 
@@ -385,6 +399,7 @@ def plan_disclosure(
         # for escapes, and high-confidence risks without dumping contents.
         blocked = 0
         reasons: list[str] = []
+        nongit_blocked_items: list[tuple[str, str]] = []
         for root, dirs, files in os.walk(source, followlinks=False):
             # Inspect directory symlinks before pruning (they would be walked otherwise).
             for d in list(dirs):
@@ -393,6 +408,7 @@ def plan_disclosure(
                 if dp.is_symlink() and _symlink_escapes(source, rel_d):
                     blocked += 1
                     reasons.append("symlink_escape")
+                    nongit_blocked_items.append((rel_d, "symlink_escape"))
             dirs[:] = [
                 d
                 for d in sorted(dirs)
@@ -404,6 +420,7 @@ def plan_disclosure(
                 if fp.is_symlink() and _symlink_escapes(source, rel):
                     blocked += 1
                     reasons.append("symlink_escape")
+                    nongit_blocked_items.append((rel, "symlink_escape"))
                     continue
                 hit = _is_sensitive_rel(rel)
                 if hit:
@@ -411,10 +428,12 @@ def plan_disclosure(
                     if content_hit:
                         blocked += 1
                         reasons.append(content_hit)
+                        nongit_blocked_items.append((rel, content_hit))
                         continue
                     # Path-shaped without content hit: still refuse non-git secrets.
                     blocked += 1
                     reasons.append(hit)
+                    nongit_blocked_items.append((rel, hit))
                     continue
                 # Templates and other files: content scan when regular file.
                 if fp.is_file() and not fp.is_symlink():
@@ -422,6 +441,7 @@ def plan_disclosure(
                     if content_hit:
                         blocked += 1
                         reasons.append(content_hit)
+                        nongit_blocked_items.append((rel, content_hit))
         if blocked:
             summary.blocked_count = blocked
             summary.reason_codes = sorted(set(reasons))
@@ -430,6 +450,7 @@ def plan_disclosure(
                 "non-git source refused: high-confidence sensitive or escaping material "
                 f"(reason_codes={summary.reason_codes}); secret values are not logged",
                 reason_codes=summary.reason_codes,
+                blocked_items=nongit_blocked_items,
             )
         summary.risk_decision = "allow"
         return summary
@@ -460,6 +481,7 @@ def plan_disclosure(
 
     included: list[str] = []
     blocked = 0
+    git_blocked_items: list[tuple[str, str]] = []
     for rel in candidates:
         if _git_is_ignored(source, rel):
             summary.excluded_count += 1
@@ -473,6 +495,7 @@ def plan_disclosure(
         if risk:
             blocked += 1
             summary.reason_codes.append(risk)
+            git_blocked_items.append((rel, risk))
             continue
         included.append(rel)
 
@@ -489,6 +512,7 @@ def plan_disclosure(
             "Use --include-dirty-path with only safe relative paths; "
             "secret values are never logged. Ignored files are never copied.",
             reason_codes=summary.reason_codes,
+            blocked_items=git_blocked_items,
         )
 
     summary.risk_decision = "allow"
@@ -497,3 +521,27 @@ def plan_disclosure(
 
 def write_disclosure_summary(clone: Path, summary: DisclosureSummary) -> Path:
     return summary.write(clone)
+
+
+def disclosure_preflight(source: Path) -> dict[str, Any]:
+    """Return one value-free disclosure scan report without creating a clone."""
+    try:
+        summary = plan_disclosure(source)
+    except DisclosureError as exc:
+        return {
+            "allowed": False,
+            "blocked_count": len(exc.blocked_items),
+            "blocked": exc.blocked_items,
+            "reason_codes": sorted(set(exc.reason_codes)),
+            "values_exposed": False,
+        }
+    return {
+        "allowed": True,
+        "blocked_count": 0,
+        "blocked": [],
+        "reason_codes": summary.reason_codes,
+        "included_dirty_count": summary.included_dirty_count,
+        "excluded_count": summary.excluded_count,
+        "source_kind": summary.source_kind,
+        "values_exposed": False,
+    }

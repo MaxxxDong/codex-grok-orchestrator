@@ -7,6 +7,38 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-19 — Immediate lifecycle signals and simpler preflight / 即时通知与简化预检
+
+**Version:** `grok-worker` 0.5.3
+
+Dispatchers can now use `grok-worker watch` for event-first waits: terminal or
+attention events wake immediately, while a compact 300-second health heartbeat
+remains as the fallback. Notification records distinguish `terminal`, `settled`,
+and `attention`, and startup failures receive a run ID early enough to notify an
+already waiting dispatcher.
+
+The new `grok-worker preflight` command performs one disclosure scan and lists
+every blocked relative path and rule code without exposing matched values. The
+credential scanner no longer classifies long runtime identifier assignments as
+literal secrets; quoted literals and high-confidence unquoted secrets still fail
+closed. Operations guidance now separates Codex tenant approval rejection from
+runner, provider, quota, and lifecycle failures.
+
+调度器现在可用 `grok-worker watch` 进行事件优先等待：终态或需介入事件会立即
+唤醒，同时保留 300 秒一次的精简健康心跳作为兜底。通知明确区分 `terminal`、
+`settled` 与 `attention`，启动失败也能及时通知已经等待的调度器。
+
+新增的 `grok-worker preflight` 只扫描一次并列出全部被拦截的相对路径与规则码，
+不输出命中值。凭据扫描不再把长运行时标识符误判为字面量密钥；带引号字面量和
+高置信度未加引号密钥仍然严格拒绝。运维文档也明确区分 Codex 租户审批拒绝、
+runner 故障、服务商/额度故障与生命周期故障。
+
+Release verification: 251-test pytest suite, Ruff, strict mypy, offline sdist/wheel
+build, clean-wheel CLI smoke, source launcher smoke, and public-tree disclosure
+checks.
+
+---
+
 ## 2026-07-19 — Native Grok, bounded caches, simple startup / 原生配置与简化启动
 
 **Version:** `grok-worker` 0.5.2

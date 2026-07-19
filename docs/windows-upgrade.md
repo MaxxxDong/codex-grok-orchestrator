@@ -1,14 +1,26 @@
-# Windows native upgrade: 0.3/0.4/0.5.1 to 0.5.2
+# Windows native upgrade: 0.3-0.5.2 to 0.5.3
 
 This integration branch supports native Windows 10/11. It does not use WSL as
 the default or as a fallback. The canonical source checkout, installed Windows
 executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
 the only active runtime chain.
 
-## What changes in 0.5.2
+## What changes in 0.5.3
 
-- One-shot `grok-worker run` defaults to the proven managed ACP chain on
-  Windows. Native Grok Build headless remains available with `--backend native`.
+- `grok-worker watch` wakes immediately for terminal or attention events and
+  retains a compact 300-second health heartbeat as fallback.
+- `grok-worker preflight` reports all blocked relative paths and rule codes in
+  one scan without exposing matched secret values.
+- Startup failures can notify an already waiting dispatcher; runtime identifiers
+  are no longer mistaken for literal credentials.
+- The 0.5.2 native Grok, cache, session-cleanup, plugin/MCP, and High-reasoning
+  behavior remains unchanged.
+
+## Changes inherited from 0.5.2
+
+- One-shot `grok-worker run` defaults to Native Headless on Windows after real
+  terminal and file-tool verification with Grok Build 0.2.103. Managed ACP
+  remains the explicit compatibility path and named-session transport.
 - Named sessions also use the managed acpx runtime.
 - Native runs now use the normal Windows `%USERPROFILE%\.grok` state, pass model
   and High effort explicitly, and reject reasoning downgrade warnings.
@@ -43,7 +55,7 @@ the only active runtime chain.
    managed acpx status, and a hash of the Grok config.
 2. Back up the full canonical repository (including `.git` and dirty files) and
    the installed uv tool plus both executables.
-3. Fetch and verify the annotated `v0.5.2` tag and Release.
+3. Fetch and verify the annotated `v0.5.3` tag and Release.
 4. Merge or port the upstream tag into an isolated worktree based on the
    existing Windows-native branch. Do not replace the Windows branch with a
    plain tag checkout.
@@ -61,16 +73,18 @@ the only active runtime chain.
 ```powershell
 $repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
 (Get-Command grok-worker).Source
+grok --version
 grok-worker --version
 grok-worker acpx-runtime-status
+grok-worker preflight --source $repo --json
 grok-worker status --source $repo --json
 grok models
 ```
 
-`grok-worker.exe` must resolve under `%USERPROFILE%\.local\bin`. The Windows
-default ACP path and named sessions require a healthy managed runtime. Explicit
-native one-shot work does not require acpx. Do not switch to WSL or global acpx
-when the managed runtime is unhealthy.
+`grok-worker.exe` must resolve under `%USERPROFILE%\.local\bin`. Default Native
+one-shot work does not require acpx. Named sessions and explicit ACP runs require
+the healthy managed runtime. Do not switch to WSL or global acpx when that
+runtime is unhealthy.
 
 ## Windows canary
 
@@ -79,12 +93,11 @@ snapshotted safely; secret-shaped files and escaping links must still be
 rejected.
 
 ```powershell
-$env:GROK_WORKER_DISPATCHER_ID = "windows-v052-canary"
+$env:GROK_WORKER_DISPATCHER_ID = "windows-v053-canary"
 grok-worker run `
-  --backend acp `
   --source $repo `
   --mode implementation `
-  --task-id windows-v052-acp-canary `
+  --task-id windows-v053-native-canary `
   --reasoning-effort high `
   --max-workers 24 `
   --prompt-file $promptFile

@@ -2,6 +2,38 @@
 
 All notable public changes are recorded here. The project follows semantic versioning while the CLI is pre-1.0.
 
+## [Unreleased]
+
+## [0.5.3] - 2026-07-19
+
+### Added
+
+- `grok-worker watch`: event-first waits with immediate terminal/attention wakeup
+  and a compact 300-second health heartbeat fallback.
+- Distinct `terminal`, `settled`, and `attention` notification kinds with cleanup,
+  artifact readiness, exit, and attention pointers. Dedup now includes event kind.
+- `grok-worker preflight`: one-pass disclosure scan listing every blocked relative
+  path and rule code without matched values. Direct run refusals expose the same
+  complete path list.
+
+### Changed
+
+- Maximum bounded event wait is 600 seconds; `events` still defaults to 30 and
+  `watch` defaults to 300.
+- CLI-created runs now allocate their `run_id` before lifecycle startup so
+  startup failures can notify an already waiting dispatcher.
+- Credential scanning no longer mistakes long runtime identifier assignments for
+  literal secrets; quoted literals and high-confidence unquoted values still
+  fail closed.
+- Operations documentation distinguishes pre-process Codex tenant approval
+  rejection from runner, provider, quota, and lifecycle failures.
+
+### Verification
+
+- Full suite: 251 tests passed; Ruff and strict mypy passed.
+- Offline sdist/wheel build, clean-wheel CLI/resource smoke, source-launcher
+  smoke, repository disclosure preflight, and archive content scans passed.
+
 ## [0.5.2] - 2026-07-19
 
 ### Changed

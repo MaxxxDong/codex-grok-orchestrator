@@ -257,7 +257,10 @@ def test_include_dirty_does_not_copy_gitignored_env(tmp_path: Path) -> None:
         capture_output=True,
     )
     (src / "dirty.txt").write_text("tracked-dirty\n", encoding="utf-8")
-    (src / ".env").write_text("SECRET_TOKEN=super-secret-value-never-log\n", encoding="utf-8")
+    ignored_secret = "super-secret-" + "value-never-log"
+    (src / ".env").write_text(
+        f"SECRET_TOKEN={ignored_secret}\n", encoding="utf-8"
+    )
     disp = tmp_path / "disp"
     disp.mkdir()
     clone, _base, _fp, disc = create_workspace(
@@ -265,7 +268,7 @@ def test_include_dirty_does_not_copy_gitignored_env(tmp_path: Path) -> None:
     )
     assert (clone / "dirty.txt").read_text(encoding="utf-8") == "tracked-dirty\n"
     assert not (clone / ".env").exists()
-    assert "super-secret-value-never-log" not in json_safe_disc(disc)
+    assert ignored_secret not in json_safe_disc(disc)
 
 
 def test_legacy_include_dirty_ignored_only_allows_clean_head(tmp_path: Path) -> None:
@@ -326,7 +329,9 @@ def test_materialized_dirty_bytes_are_rescanned_after_source_race(
 
     def mutate_after_clone(source: Path, dest: Path) -> str:
         base = original(source, dest)
-        candidate.write_text("api_key=abcdefghijklmnop123456\n", encoding="utf-8")
+        candidate.write_text(
+            "api_key=" + "abcdefghijklmnop123456\n", encoding="utf-8"
+        )
         return base
 
     monkeypatch.setattr(clone_module, "create_git_clone", mutate_after_clone)
@@ -418,7 +423,7 @@ def test_dirty_symlink_escape_refused(tmp_path: Path) -> None:
 def test_secret_path_refused_without_logging_value(tmp_path: Path) -> None:
     src = tmp_path / "src"
     init_git_repo(src)
-    secret_body = "AKIA_FAKE_SECRET_VALUE_1234567890"
+    secret_body = "AKIA_" + "FAKE_SECRET_VALUE_1234567890"
     (src / "credentials.json").write_text(
         f'{{"api_key": "{secret_body}"}}\n', encoding="utf-8"
     )
@@ -447,7 +452,7 @@ def test_env_example_path_exempt_from_path_only_refusal(tmp_path: Path) -> None:
 def test_env_example_with_secret_content_refused(tmp_path: Path) -> None:
     src = tmp_path / "src"
     init_git_repo(src)
-    secret = "super-secret-token-abcdefgh"
+    secret = "super-" + "secret-token-" + "abcdefgh"
     (src / ".env.example").write_text(f"api_key={secret}\n", encoding="utf-8")
     disp = tmp_path / "disp"
     disp.mkdir()

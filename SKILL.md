@@ -66,15 +66,24 @@ ID and reuse it for every worker in that task through
 different Root task. Run a minimal live smoke test before a significant wave
 when there is no recent successful proof.
 
-If all configured slots for the current dispatcher are busy, do not preempt or replace workers. Wait for completion events for 30 seconds by default (explicit 0 is a poll; maximum one wait is 120 seconds), then retry the exact bounded task. A wait timeout means only “no matching event yet,” not Worker failure.
+When the source has uncommitted test credentials or a prior disclosure refusal,
+run `grok-worker preflight --source "$REPO" --json` once before retrying. It
+reports every blocked relative path and rule code in one pass without values.
+Do not weaken the scanner or retry one path at a time. An ordinary `run` refusal
+also prints the complete blocked-path list.
+
+If all configured slots for the current dispatcher are busy, do not preempt or
+replace workers. Use `watch` for the dispatcher and retry the exact bounded task
+after a terminal event. A wait timeout means only “no matching event yet,” not
+Worker failure.
 
 ## Choose one-shot or named session
 
 Use `run` for one bounded turn.
 
-`run` uses managed `--backend acp` by default on Windows because the current
-native Grok workspace sandbox can reject terminal processes; other platforms
-default to `--backend native`. Either backend may be selected explicitly.
+`run` defaults to `--backend native` on every platform. Windows terminal and
+file tools are verified with Grok Build 0.2.103. Managed `--backend acp` remains
+available for compatibility and continues to power named sessions.
 
 Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous iteration.
 Named sessions remain ACP-backed in v0.5.
@@ -119,6 +128,7 @@ Create one stable opaque ID for the current Root task and reuse it for all comma
 
 ```bash
 export GROK_WORKER_DISPATCHER_ID="codex-<opaque-current-task-id>"
+export GROK_WORKER_RUN_ID="run-<opaque-current-run-id>"
 ```
 
 One-shot implementation:
@@ -127,6 +137,7 @@ One-shot implementation:
 grok-worker run \
   --source "$REPO" \
   --backend native \
+  --run-id "$GROK_WORKER_RUN_ID" \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
   --disposable-root "$DISPOSABLE_ROOT" \
   --artifact-root "$ARTIFACT_ROOT" \
@@ -140,6 +151,7 @@ One-shot read-only analysis/review:
 grok-worker run \
   --source "$REPO" \
   --backend native \
+  --run-id "$GROK_WORKER_RUN_ID" \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
   --disposable-root "$DISPOSABLE_ROOT" \
   --artifact-root "$ARTIFACT_ROOT" \
@@ -200,6 +212,10 @@ grok-worker lease-set --disposable-root "$DISPOSABLE_ROOT" \
   --task-id "$TASK_ID" --idle-timeout 3600 --hard-timeout 86400
 grok-worker events --shared-cache-root "$CACHE" --after "" \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" --wait-seconds 30 --json
+grok-worker watch --shared-cache-root "$CACHE" \
+  --disposable-root "$DISPOSABLE_ROOT" --run-id "$GROK_WORKER_RUN_ID" \
+  --after "" --wait-seconds 300 --json
+grok-worker preflight --source "$REPO" --json
 grok-worker config-apply \
   --config "$CONFIG" --candidate "$CANDIDATE" \
   --smoke-argv-json '["/usr/bin/true"]' --smoke-timeout 5 --json
@@ -214,7 +230,7 @@ fields, config-apply rollback semantics, and authority boundaries.
 
 Optional one-shot controls:
 
-- `--backend native|acp`: Windows defaults to managed ACP; other platforms default to native.
+- `--backend native|acp`: native is the one-shot default; ACP is the compatibility and named-session transport.
 - `--keep "REASON"`: explicit indefinite clone retention.
 - Safe staged, unstaged, and untracked files are snapshotted automatically.
   Ignored files are never copied. Sensitive paths/content and escaping symlinks
@@ -296,19 +312,34 @@ reasoning downgrade, and unverifiable implementation results are failures.
 
 - **Authority**: `.grok-worker/lifecycle.json` is the only state source. Shared-cache
   completion events and optional `progress.json` are notification/advisory only.
-- **Completion events**: terminal transitions append one deduplicated pointer event
-  under `$SHARED_CACHE_ROOT/notifications/completion-events.jsonl`. Query with
-  `grok-worker events --after <event_id> --wait-seconds <n> --json`. Events never
-  carry prompts, tokens, env, or agent output. Emit is best-effort (I/O failure
-  never reverses lifecycle/GC); readers discard malformed rows.
-- **Health checks**: while workers are active, run `grok-worker health` about every
-  300 seconds. It is diagnostic-only and read-only: it reports lifecycle,
+- **Completion events**: terminal transitions append an immediate `terminal`
+  pointer; one-shot cleanup then appends `settled`. Startup failures that occur
+  after CLI configuration emit `attention`. Events are deduplicated by
+  `(run_id, state, kind)` and never carry prompts, tokens, env, file contents, or
+  agent output. Emit is best-effort; lifecycle remains authoritative.
+- **Default waiting**: call `grok-worker watch` with an explicit `run_id` or
+  `dispatcher_id`. It long-polls up to 300 seconds and returns immediately on an
+  event. Only on timeout does it return one compact health heartbeat. Preserve
+  `next_cursor` between calls. For a parallel wave, one dispatcher-scoped watch
+  replaces per-worker status polling.
+- **Handoff rule**: on `terminal/success`, inspect the artifact and then watch
+  from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
+  and the bounded log tail. An unchanged heartbeat needs no full log read and no
+  user-facing narration.
+- **Health checks**: `health` remains a diagnostic-only read-only fallback. It reports lifecycle,
   bounded non-symlink workspace activity, fixed progress step, result/artifact
   readiness, process identity, CPU/RSS, and timeout remaining, but never kills,
   restarts, preempts, or disposes a Worker. The runner renews an activity lease
   from managed Grok session events, progress/result files, agent-log growth, and
   bounded workspace activity. A truly quiet worker expires after 1800 seconds by
   default; the separate 24h hard cap prevents an active infinite loop.
+- **Platform approval boundary**: if Codex rejects the `grok-worker run` command
+  before process creation because an external Grok service is not approved for
+  private repository disclosure, no Worker exists and the Skill cannot emit a
+  lifecycle event or override that tenant policy. Do not retry or disguise the
+  command. Use an administrator-approved provider/command, or have the user run
+  the exact command directly in their local terminal and let Codex consume only
+  the resulting local lifecycle/artifacts.
 - **Status summary**: `grok-worker status --json` adds per-clone `phase`,
   `last_activity_at`, `activity_source`, `progress_step`, `elapsed_seconds`,
   `timeout_seconds`, `remaining_seconds`, `timeout_mode`, hard-cap fields,

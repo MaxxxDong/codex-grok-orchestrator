@@ -84,7 +84,8 @@ pre-existing system tools or an explicitly supplied absolute interpreter.
 ### What it is
 
 When a managed worker reaches a terminal state (`success`, `failed`, `keep`, …),
-the runner appends **one** JSON line under:
+the runner appends an immediate `terminal` JSON line. After one-shot session and
+clone cleanup finishes, it appends a distinct `settled` line under:
 
 ```text
 $SHARED_CACHE_ROOT/notifications/completion-events.jsonl
@@ -109,6 +110,9 @@ Optional pointer fields on new emits (when known):
 
 - `run_id` — unique per execution
 - `dispatcher_id` — explicit dispatcher scope
+- `kind` — `terminal`, `settled`, or `attention`
+- `exit_code`, `artifact_ready`, `clone_cleaned`, `session_cleaned`
+- `attention_required`, `reason_code`
 
 Forbidden in events: prompt text, tokens, API keys, environment maps,
 stdout/stderr, model/agent output, MCP config. Never include secret values or
@@ -116,8 +120,8 @@ file contents.
 
 ### Dedup and concurrency
 
-- Dedup key: `(run_id, state)` when `run_id` is present. Legacy rows without
-  `run_id` still dedupe as `(task_id, state)` among run_id-less events.
+- Dedup key: `(run_id, state, kind)` when `run_id` is present. Legacy rows without
+  `run_id` still dedupe as `(task_id, state, kind)` among run_id-less events.
 - Re-finalize / re-reconcile of the same terminal pair does not append again.
 - Appends take an exclusive lock beside the log; writes are full JSON lines with
   flush/fsync so concurrent writers do not leave half-line JSON.
@@ -134,8 +138,8 @@ file contents.
 
 - Default `--wait-seconds` is **30**.
 - Explicit **0** is non-blocking.
-- Values must be in **0..120** inclusive; negatives and values greater than 120
-  are rejected. Callers may repeat waits; 120 is not a worker timeout.
+- Values must be in **0..600** inclusive; negatives and values greater than 600
+  are rejected. The default `events` wait remains 30; `watch` defaults to 300.
 
 ### Typical commands
 
@@ -161,6 +165,32 @@ grok-worker events \
 
 JSON envelope includes an `events` array. Exit 0 on successful query even when
 the list is empty.
+
+### Default low-noise watch loop
+
+Use a caller-supplied unique `run_id` so observation can start before the worker
+finishes:
+
+```bash
+grok-worker watch \
+  --shared-cache-root "$CACHE" \
+  --disposable-root "$DISPOSABLE" \
+  --run-id "$RUN_ID" \
+  --after "$CURSOR" \
+  --wait-seconds 300 \
+  --json
+```
+
+The command returns immediately with `kind=events` when a matching terminal,
+settled, or attention event appears. Otherwise it returns one `kind=heartbeat`
+snapshot after the bounded wait. Feed `next_cursor` into the next call. One
+dispatcher-scoped watch can cover a parallel wave. This command never reads full
+logs and never mutates, restarts, or cleans workers.
+
+On `terminal/success`, consume the verified artifact and wait once more for
+`settled`. On failure or `attention_required=true`, inspect authoritative
+lifecycle and only then a bounded log tail. Do not repeatedly read unchanged
+status/log output between heartbeats.
 
 ## 1b. Per-dispatcher concurrency (OS flock slot leases)
 
@@ -251,6 +281,12 @@ lifecycle remains the authority for worker state and terminal outcome.
   include file contents or secret values in the error.
 - Before clone/deps, high-confidence sensitive dirty/non-git material is refused
   without logging secret values. Clean committed Git content stays trusted.
+- `grok-worker preflight --source "$REPO" --json` performs the same value-free
+  source scan without creating a clone. A refusal reports every blocked relative
+  path and rule code in one response, so synthetic PAT/Bearer/API-key fixtures
+  can all be changed to runtime composition before one retry. Direct `run`
+  refusals also print the complete blocked-path list. Neither path logs matched
+  values; the scanner remains fail-closed.
 - A structured disclosure summary (source_kind, base SHA, counts, relative
   included paths, reason codes, risk decision — values/content/prompt/env-free)
   is written under `.grok-worker/disclosure.json` and also stored on
@@ -263,9 +299,9 @@ lifecycle remains the authority for worker state and terminal outcome.
 
 ## 1e. Backend and startup recovery
 
-- `grok-worker run` defaults to managed `--backend acp` on Windows and
-  `--backend native` elsewhere. Native directly invokes Grok Build headless with
-  a prompt file and JSON output.
+- `grok-worker run` defaults to `--backend native` on every platform. Native
+  directly invokes Grok Build headless with a prompt file and JSON output;
+  Windows terminal and file tools are verified with Grok Build 0.2.103.
 - `--backend acp` retains the previous transport. Named sessions remain ACP-only
   in 0.5.x.
 - Native one-shot execution uses the user's normal `HOME` and `~/.grok`. Plugins,
@@ -290,6 +326,19 @@ lifecycle remains the authority for worker state and terminal outcome.
   are ordinary backend log entries, not lifecycle launch gates.
 - Dependency prewarm errors become `startup_warnings`; they do not prevent the
   backend from trying task-local verification.
+- Startup exceptions after CLI configuration append an `attention/startup_failed`
+  event with a sanitized reason code. Validation errors returned synchronously
+  before a run configuration exists remain ordinary CLI errors.
+
+### Codex tenant approval happens before the runner
+
+An execution approval reviewer may reject a command that would send a private
+repository to an unapproved external Grok service. That rejection occurs before
+the process is created: there is no clone, lifecycle, Worker event, provider call,
+or quota use. `grok-worker`, Grok, and Skill documentation cannot override or
+circumvent it. Do not retry the same command. Use an administrator-approved
+provider/command, or let the user run the exact command directly in their local
+terminal and have Codex consume only local lifecycle/artifacts afterward.
 - If an explicit task ID already belongs to a retained clone, the runner keeps
   that evidence and allocates a suffixed ID. It never overwrites the old clone.
 
@@ -407,6 +456,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.5.2`. Lifecycle and artifact formats remain
+The current public release is `0.5.3`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
