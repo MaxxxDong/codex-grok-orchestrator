@@ -126,6 +126,7 @@ def test_agent_defaults_to_worker_approval_and_subagents(monkeypatch) -> None:  
     command = build_command()
     assert "--always-approve" in command
     assert "--no-subagents" not in command
+    assert "--leader-socket" not in command
     assert command[command.index("--model") + 1]
     assert command[command.index("--reasoning-effort") + 1]
 
@@ -162,6 +163,9 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
 
     assert agent_entry.main() == 0
     assert captured["check"] is False
+    assert captured["stdin"] is not None
+    assert captured["stdout"] is not None
+    assert captured["stderr"] is not None
     child_env = captured["env"]
     if os.name == "nt":
         assert child_env["GROK_MANAGED_BY_NPM"] == "1"
@@ -173,6 +177,23 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
         assert startup_info.wShowWindow == subprocess.SW_HIDE
     else:
         assert startup_info is None
+
+
+def test_grok_environment_probe_decodes_utf8_explicitly(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    from grok_worker.run_config import check_grok_environment
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout='{"label":"中文"}', stderr="")
+
+    monkeypatch.setattr("grok_worker.run_config.subprocess.run", fake_run)
+
+    assert check_grok_environment("grok", cwd=tmp_path, environ={}) is None
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
 
 
 def test_agent_can_explicitly_disable_subagents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
