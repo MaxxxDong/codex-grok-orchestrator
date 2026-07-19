@@ -16,6 +16,7 @@ def test_explicit_keep_survives_gc(
     cfg = RunConfig(
         source=git_source,
         prompt="keep me",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],

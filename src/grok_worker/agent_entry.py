@@ -9,12 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from grok_worker.grok_profile import (
-    GrokProfileError,
-    isolated_child_environment,
-    prepare_isolated_profile,
-    validate_isolated_profile,
-)
+from grok_worker.run_config import check_grok_environment
 from grok_worker.settings import default_model, default_reasoning_effort, env_flag, env_text
 
 
@@ -56,20 +51,13 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        profile = prepare_isolated_profile(
-            model_id=default_model(),
-            reasoning_effort=default_reasoning_effort(),
+        warning = check_grok_environment(
+            command[0], cwd=Path.cwd(), environ=os.environ.copy()
         )
-        child_env = isolated_child_environment(os.environ, profile)
-        validate_isolated_profile(
-            grok_bin=command[0],
-            profile=profile,
-            environ=child_env,
-            cwd=Path.cwd(),
-            allow_extensions=env_flag("GROK_WORKER_ALLOW_GROK_EXTENSIONS", default=False),
-        )
-        completed = subprocess.run(command, env=child_env, check=False)
-    except (GrokProfileError, OSError, ValueError) as exc:
+        if warning:
+            print(f"grok-worker-agent: warning: {warning}", file=sys.stderr)
+        completed = subprocess.run(command, env=os.environ.copy(), check=False)
+    except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
     finally:

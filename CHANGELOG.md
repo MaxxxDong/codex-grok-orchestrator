@@ -2,6 +2,41 @@
 
 All notable public changes are recorded here. The project follows semantic versioning while the CLI is pre-1.0.
 
+## [0.5.2] - 2026-07-19
+
+### Changed
+
+- One-shot library/API callers now default to native Grok Build headless, matching
+  the CLI. ACP is explicit compatibility transport and remains the v0.5 named-session backend.
+- Stable Skill/role instructions stay at the start of one-shot prompts. Dynamic
+  clone, dependency, and cache paths remain process environment only.
+- Native and ACP processes use the user's normal Grok home. Configured plugins,
+  MCP servers, OAuth state, bundled resources, provider settings, High reasoning,
+  and prompt-cache eligibility remain available. Repository `.mcp.json` is no
+  longer masked.
+- Every launch runs an advisory `grok inspect --json`. Failure is logged but does
+  not block the actual process; extension diagnostics are not availability gates.
+- The source launcher validates cache ownership, rejects symlinks, enforces mode
+  `0700`, and falls back when the platform default is sandbox-read-only. It uses
+  an existing project virtual environment first, so normal starts remain offline.
+- Repository development commands use an ignored, writable `.uv-cache`, so a
+  sandboxed `uv run` no longer fails against the host `~/.cache/uv` before tests start.
+- One-shot native calls disable cross-session memory and remove only their exact
+  clone-keyed Grok session bucket after completion. Mutable package caches remain
+  disposable; prepared environments and package downloads remain shared and leased.
+- Removed the duplicate pre-launch GC pass. Dependency prewarm I/O failures are
+  warnings, and post-run GC errors no longer override a completed task.
+- macOS process birth identity now uses `libproc` before `ps`, preserving accurate
+  cross-process health checks inside restricted hosts.
+
+### Verification
+
+- Full suite: 241 tests passed; Ruff and strict mypy passed; sdist and wheel built offline.
+- A restricted-cache launcher smoke completed from the existing virtual environment
+  without network access.
+- Controlled native Krill runs retained High reasoning and provider cache-read
+  metrics. Repeated calls in one cwd hit cache; different clone cwd values may miss.
+
 ## [0.5.1] - 2026-07-19
 
 ### Fixed

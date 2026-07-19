@@ -13,7 +13,6 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from grok_worker.constants import (
     DEFAULT_HARD_TIMEOUT,
@@ -24,7 +23,7 @@ from grok_worker.constants import (
     OUTPUT_DIR_NAME,
     RESULT_FILE_NAME,
 )
-from grok_worker.grok_profile import worker_grok_home
+from grok_worker.grok_state import clone_session_root
 from grok_worker.locks import FileLock
 from grok_worker.models import atomic_write_text, dt_to_iso, utc_now
 from grok_worker.paths import meta_dir
@@ -215,8 +214,7 @@ class ActivityProbe:
     ) -> None:
         self.clone = clone.resolve()
         self.agent_log = agent_log
-        encoded = quote(str(self.clone), safe="")
-        self.session_root = worker_grok_home(environ or os.environ) / "sessions" / encoded
+        self.session_root = clone_session_root(self.clone, environ or os.environ)
         self._last_workspace_scan = 0.0
         self._workspace_observation: ActivityObservation | None = None
 

@@ -26,7 +26,9 @@ from grok_worker.session_process import SessionConfig
 
 def test_default_task_timeout_1800_constant_aligned() -> None:
     assert DEFAULT_ACPX_TIMEOUT == 1800
-    assert RunConfig(source=Path("."), prompt="x").timeout == DEFAULT_ACPX_TIMEOUT
+    default = RunConfig(source=Path("."), prompt="x")
+    assert default.timeout == DEFAULT_ACPX_TIMEOUT
+    assert default.backend == "native"
     fields = {f.name: f for f in SessionConfig.__dataclass_fields__.values()}
     assert fields["timeout"].default is DEFAULT_ACPX_TIMEOUT
 
@@ -40,6 +42,7 @@ def test_extended_timeout_3600_supported(
     cfg = RunConfig(
         source=git_source,
         prompt="long task",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -62,7 +65,9 @@ def test_extended_timeout_3600_supported(
 
 
 def test_ordinary_timeout_is_worker_lease_not_acpx_deadline(tmp_path: Path) -> None:
-    cfg = RunConfig(source=tmp_path, prompt="p", timeout=DEFAULT_ACPX_TIMEOUT)
+    cfg = RunConfig(
+        source=tmp_path, prompt="p", backend="acp", timeout=DEFAULT_ACPX_TIMEOUT
+    )
     cmd = build_acpx_cmd(cfg, tmp_path, "agent", "hello")
     assert "--timeout" not in cmd
 
@@ -74,6 +79,7 @@ def test_prompt_only_research_mode(
     cfg = RunConfig(
         source=None,
         prompt="Research a design question without a repository.",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -98,6 +104,7 @@ def test_prompt_only_research_auto_approves_non_terminal_search_tools(tmp_path: 
     cfg = RunConfig(
         source=None,
         prompt="Research current public evidence.",
+        backend="acp",
         prompt_only=True,
         mode="research",
     )
@@ -116,6 +123,7 @@ def test_prompt_only_rejects_implementation() -> None:
     cfg = RunConfig(
         source=None,
         prompt="x",
+        backend="acp",
         prompt_only=True,
         mode="implementation",
         prepare_deps=False,
@@ -130,6 +138,7 @@ def test_prompt_only_rejects_dirty_flags(tmp_path: Path) -> None:
     cfg = RunConfig(
         source=None,
         prompt="x",
+        backend="acp",
         prompt_only=True,
         mode="research",
         include_dirty=True,
@@ -149,6 +158,7 @@ def test_prompt_only_rejects_non_null_source(tmp_path: Path) -> None:
     cfg = RunConfig(
         source=tmp_path / "repo",
         prompt="x",
+        backend="acp",
         prompt_only=True,
         mode="research",
         prepare_deps=False,
@@ -168,6 +178,7 @@ def test_disclosure_summary_on_lifecycle_meta(
     cfg = RunConfig(
         source=git_source,
         prompt="meta disclosure",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],

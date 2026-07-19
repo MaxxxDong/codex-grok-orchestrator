@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
@@ -49,10 +50,9 @@ class RunConfig:
     dispatcher_id: str | None = None
     run_id: str | None = None
     prompt_only: bool = False
-    # Library callers keep the v0.4 ACP default. The public `run` CLI passes
-    # native explicitly, so existing embedded callers do not start real Grok
-    # unexpectedly during an upgrade.
-    backend: str = "acp"
+    # One-shot execution uses Grok Build headless directly. ACP remains an
+    # explicit compatibility backend and powers named sessions in v0.5.
+    backend: str = "native"
 
     def __post_init__(self) -> None:
         if not self.model:
@@ -132,6 +132,32 @@ def default_grok_bin() -> str:
     raise FileNotFoundError("cannot locate grok; install Grok Build or set PATH")
 
 
+def check_grok_environment(
+    grok_bin: str, *, cwd: Path, environ: dict[str, str]
+) -> str | None:
+    """Run an advisory native-config probe without gating plugins or MCP."""
+    try:
+        completed = subprocess.run(
+            [grok_bin, "inspect", "--json"],
+            cwd=cwd,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return "Grok environment check timed out; continuing to actual launch"
+    except OSError as exc:
+        raise FileNotFoundError(f"cannot start Grok Build: {exc}") from exc
+    if completed.returncode != 0:
+        return (
+            f"Grok environment check exited {completed.returncode}; "
+            "continuing so plugin/MCP diagnostics remain non-blocking"
+        )
+    return None
+
+
 def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str]:
     read_only = cfg.mode in {"analysis", "research"}
     cmd = [
@@ -155,5 +181,7 @@ def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str
     )
     if not cfg.allow_subagents:
         cmd.append("--no-subagents")
-    cmd.extend(["--output-format", "json", "--prompt-file", str(prompt_file)])
+    cmd.extend(
+        ["--no-memory", "--output-format", "json", "--prompt-file", str(prompt_file)]
+    )
     return cmd

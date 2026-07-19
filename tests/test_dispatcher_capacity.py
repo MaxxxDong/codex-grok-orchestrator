@@ -32,7 +32,7 @@ from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
 from grok_worker.paths import meta_path
 
 
-def test_max_concurrent_default_remains_10() -> None:
+def test_max_concurrent_default_remains_ten() -> None:
     assert MAX_CONCURRENT_WORKERS == 10
 
 
@@ -42,40 +42,40 @@ def test_slot_lock_paths_are_fixed_under_dispatcher_hash(tmp_path: Path) -> None
     did = "dispatcher-alpha"
     dig = hash_identity(did)
     p0 = slot_lock_path(shared, did, 0)
-    p9 = slot_lock_path(shared, did, 9)
+    plast = slot_lock_path(shared, did, MAX_CONCURRENT_WORKERS - 1)
     assert dig in str(p0)
     assert p0.name == "00.lock"
-    assert p9.name == "09.lock"
+    assert plast.name == f"{MAX_CONCURRENT_WORKERS - 1:02d}.lock"
     assert "slots" in p0.parts
     with pytest.raises(ValueError):
-        slot_lock_path(shared, did, 10)
+        slot_lock_path(shared, did, MAX_CONCURRENT_WORKERS)
 
 
-def test_ten_slots_block_eleventh(tmp_path: Path) -> None:
+def test_all_slots_block_next(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "cap-d"
     held: list[FileLock] = []
-    for _ in range(10):
-        held.append(try_acquire_slot(shared, did, limit=10))
-    assert count_held_slots(shared, did) == 10
+    for _ in range(MAX_CONCURRENT_WORKERS):
+        held.append(try_acquire_slot(shared, did))
+    assert count_held_slots(shared, did) == MAX_CONCURRENT_WORKERS
     with pytest.raises(DispatcherConcurrencyError) as excinfo:
-        try_acquire_slot(shared, did, limit=10)
+        try_acquire_slot(shared, did)
     assert excinfo.value.code == DISPATCHER_CONCURRENCY_BUSY
     assert DISPATCHER_CONCURRENCY_BUSY in str(excinfo.value)
-    assert excinfo.value.active == 10
-    assert excinfo.value.limit == 10
+    assert excinfo.value.active == MAX_CONCURRENT_WORKERS
+    assert excinfo.value.limit == MAX_CONCURRENT_WORKERS
     for lock in held:
         lock.release()
     assert count_held_slots(shared, did) == 0
-    free = try_acquire_slot(shared, did, limit=10)
+    free = try_acquire_slot(shared, did)
     free.release()
 
 
 def test_other_dispatcher_does_not_block(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
-    held = [try_acquire_slot(shared, "other-disp", limit=10) for _ in range(10)]
+    held = [try_acquire_slot(shared, "other-disp") for _ in range(MAX_CONCURRENT_WORKERS)]
     # Different dispatcher has full budget.
     mine = reserve_dispatcher_capacity(shared, "mine", mode="analysis")
     assert count_held_slots(shared, "mine") == 1
@@ -90,7 +90,7 @@ def test_session_open_meta_does_not_consume_flock_slot(tmp_path: Path) -> None:
     shared.mkdir()
     root = tmp_path / "root"
     root.mkdir()
-    for i in range(10):
+    for i in range(MAX_CONCURRENT_WORKERS):
         clone = root / f"s{i}"
         clone.mkdir()
         now = utc_now()
@@ -110,7 +110,7 @@ def test_session_open_meta_does_not_consume_flock_slot(tmp_path: Path) -> None:
 
         meta_dir(clone).mkdir(parents=True, exist_ok=True)
         meta.write(meta_path(clone))
-    # All ten OS slots still free.
+    # Idle session rows do not consume any OS slots.
     assert count_held_slots(shared, "sess") == 0
     lease = reserve_dispatcher_capacity(shared, "sess", mode="analysis")
     lease.release()
@@ -209,9 +209,9 @@ def test_root_scoped_without_dispatcher_id_still_limits_one_root(
             managed_by=MANAGED_BY,
         )
         meta.write(meta_path(c))
-    assert count_active_workers(tmp_roots["disposable"]) == 10
+    assert count_active_workers(tmp_roots["disposable"]) == MAX_CONCURRENT_WORKERS
     with pytest.raises(ConcurrencyError):
-        enforce_concurrency(tmp_roots["disposable"], 10)
+        enforce_concurrency(tmp_roots["disposable"], MAX_CONCURRENT_WORKERS)
 
 
 def test_session_open_not_in_root_scoped_active_count(tmp_roots: dict[str, Path]) -> None:
@@ -251,7 +251,7 @@ def _slot_worker(
 
     barrier.wait(timeout=30)
     try:
-        lock = try_acquire_slot(Path(shared), did, limit=10)
+        lock = try_acquire_slot(Path(shared), did)
     except DispatcherConcurrencyError as exc:
         result_q.put({"i": i, "ok": False, "code": exc.code, "active": exc.active})
         return
@@ -262,11 +262,11 @@ def _slot_worker(
 
 
 def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) -> None:
-    """Eleven concurrent processes: exactly ten acquire, one gets BUSY."""
+    """One process beyond capacity gets BUSY without oversubscription."""
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "mp-slots"
-    n = 11
+    n = MAX_CONCURRENT_WORKERS + 1
     ctx = mp.get_context("spawn")
     barrier = ctx.Barrier(n)
     result_q: mp.Queue = ctx.Queue()
@@ -285,10 +285,10 @@ def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) 
     results = [result_q.get(timeout=5) for _ in range(n)]
     ok = [r for r in results if r["ok"]]
     busy = [r for r in results if not r["ok"]]
-    assert len(ok) == 10
+    assert len(ok) == MAX_CONCURRENT_WORKERS
     assert len(busy) == 1
     assert busy[0]["code"] == DISPATCHER_CONCURRENCY_BUSY
-    assert busy[0]["active"] == 10
+    assert busy[0]["active"] == MAX_CONCURRENT_WORKERS
 
 
 def _impl_source_worker(

@@ -204,25 +204,26 @@ lifecycle remains the authority for worker state and terminal outcome.
   Build headless with a prompt file and JSON output.
 - `--backend acp` retains the previous transport. Named sessions remain ACP-only
   in 0.5.x.
-- The isolated profile uses a stable source/config/effort-keyed runtime `HOME`
-  and native `~/.grok`; it never sets `GROK_HOME` for the child. Different
-  providers or efforts cannot overwrite one another. Plugins/MCP are empty
-  after `grok inspect --json`, credentials remain in the child environment, and
-  High reasoning support is explicit.
+- Native one-shot execution uses the user's normal `HOME` and `~/.grok`. Plugins,
+  MCP servers, OAuth state, provider settings, and stable-channel metadata remain
+  available. `grok inspect --json` runs as an advisory environment check; timeout
+  or nonzero exit is logged and the actual Grok launch still proceeds.
 - Native `analysis` and `research` use Grok's OS `read-only` sandbox plus `plan`
   permission mode. Implementation alone receives workspace write approval.
 - Native mutable UV/PIP/NPM/Poetry caches live under the disposable
   `.grok-output/.runtime-cache`; prepared environments remain shared and
   read-only. This avoids host-cache permission retries inside Grok's sandbox.
+- One-shot native commands use `--no-memory`. After the process exits, the exact
+  `~/.grok/sessions/<encoded-clone>` bucket is safely removed; unrelated Grok
+  sessions, plugins, credentials, and shared package caches are untouched.
+- Source-checkout development uses ignored `.uv-cache/` through `uv.toml` so
+  `uv run`, `uv sync`, and `uv build` do not touch a sandbox-read-only host cache.
 - The selected worker model is also used for session summaries, preventing the
   built-in `grok-build` auxiliary model from reaching an incompatible relay.
 - A warning that Grok ignored requested reasoning effort changes the backend
   outcome to failure even if the worker wrote a completed result.
-- Repository `.mcp.json` is renamed to a private same-filesystem backup inside
-  `.grok-worker` only while the backend runs. A worker-owned `skip-worktree`
-  flag hides that temporary move from Git. Original bytes always win on restore;
-  a same-name worker replacement is quarantined under managed metadata. Tracked
-  symlinks are masked too, and interrupted pre-move flags self-recover.
+- Repository `.mcp.json` remains visible to Grok. MCP/plugin startup diagnostics
+  are ordinary backend log entries, not lifecycle launch gates.
 - Dependency prewarm errors become `startup_warnings`; they do not prevent the
   backend from trying task-local verification.
 - If an explicit task ID already belongs to a retained clone, the runner keeps
@@ -342,6 +343,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.5.1`. Lifecycle and artifact formats remain
+The current public release is `0.5.2`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.

@@ -1,19 +1,23 @@
-# Windows / WSL upgrade: 0.3/0.4 to 0.5.1
+# Windows / WSL upgrade: 0.3/0.4/0.5.1 to 0.5.2
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
 
-## What changes in 0.5.1
+## What changes in 0.5.2
 
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
 - `--backend acp` and named sessions remain available and still require `acpx`.
-- The isolated runtime uses a private `HOME` with a normal `~/.grok`, preserving
-  explicit High reasoning while excluding user plugins and MCP servers.
-- A repository `.mcp.json` is masked only in the disposable clone while Grok
-  runs, then restored before artifact capture.
+- Workers use the native Grok home, so configured plugins, MCP servers, OAuth,
+  stable-channel metadata, explicit High reasoning, and prompt-cache behavior
+  remain available.
+- Project-local `.uv-cache` and launcher fallback prevent sandbox-denied writes
+  to the host UV cache before the Worker starts.
+- The launcher prefers its installed virtual environment, so normal starts do not
+  require package-network access. Clone-owned Grok sessions are removed on exit.
+- Repository `.mcp.json` remains visible; extension diagnostics do not block launch.
 - Ordinary staged, unstaged, and untracked files are snapshotted automatically.
   Ignored files stay excluded; suspected secrets and escaping symlinks still
   fail closed.
@@ -51,7 +55,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.5.1 --depth 1 \
+git clone --branch v0.5.2 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 

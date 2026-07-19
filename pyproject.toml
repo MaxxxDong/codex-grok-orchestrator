@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grok-worker"
-version = "0.5.1"
+version = "0.5.2"
 description = "Lifecycle-managed, isolated Grok workers with native and ACP backends"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["typer==0.15.2", "click==8.1.8"]
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "mypy>=1.13", "pytest>=8.0", "ruff>=0.8"]
+dev = ["hatchling>=1.27", "mypy>=1.13", "pytest>=8.0", "ruff>=0.8"]
 
 [project.scripts]
 grok-worker = "grok_worker.cli:main"

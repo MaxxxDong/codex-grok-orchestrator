@@ -17,7 +17,7 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-19
 
-`grok-worker` **0.5.1** makes native Grok Build headless execution the one-shot default, keeps ACP as an explicit compatibility backend, restores explicit High reasoning in an isolated native `HOME`, and removes common safe-startup blockers. Ordinary dirty files are snapshotted automatically, retained task-ID collisions get a fresh clone, dependency prewarm failures become warnings, and project `.mcp.json` is masked only while Grok runs. Native tool caches now stay writable inside the disposable workspace while prepared environments remain shared. Sensitive files, escaping symlinks, capacity, artifact verification, and cleanup safety remain hard gates. See the [release notes](docs/releases/release-notes.md) and [Windows/WSL upgrade guide](docs/windows-upgrade.md).
+`grok-worker` **0.5.2** uses native Grok Build and the user's normal `~/.grok` for one-shot work, preserving configured plugins, MCP servers, OAuth state, High reasoning, and provider prompt caching. Startup inspection is advisory: plugin/MCP diagnostics are logged but never block the actual Grok launch. Mutable package caches stay inside the disposable clone, prepared environments remain shared, and clone-owned Grok sessions are removed after completion. The launcher also recovers from sandbox-read-only UV cache paths. Worker concurrency remains bounded at ten per dispatcher; each Grok is instructed to use at most three internal subagents. ACP remains explicit compatibility transport and the v0.5 named-session backend. See the [release notes](docs/releases/release-notes.md) and [Windows/WSL upgrade guide](docs/windows-upgrade.md).
 
 ---
 
@@ -100,7 +100,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.1"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.2"
 ```
 
 开发：
@@ -162,7 +162,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
-- [Windows / WSL 0.3/0.4 → 0.5.1 升级](docs/windows-upgrade.md)
+- [Windows / WSL 0.3/0.4/0.5.1 → 0.5.2 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -258,7 +258,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.1"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.2"
 ```
 
 Development:
@@ -320,7 +320,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
-- [Windows / WSL 0.3/0.4 → 0.5.1 upgrade](docs/windows-upgrade.md)
+- [Windows / WSL 0.3/0.4/0.5.1 → 0.5.2 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)

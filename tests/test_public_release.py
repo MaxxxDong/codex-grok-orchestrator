@@ -18,6 +18,7 @@ def test_public_tree_contains_no_personal_home_paths() -> None:
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".uv-cache",
         ".venv",
         "build",
         "dist",
@@ -179,7 +180,13 @@ def test_packaged_prompts_load_without_repository_assets() -> None:
 def test_mcp_config_is_optional_in_acpx_command(tmp_path: Path) -> None:
     from grok_worker.run_config import RunConfig, build_acpx_cmd
 
-    cfg = RunConfig(source=tmp_path, prompt="review", mcp_config=None, model="test-model")
+    cfg = RunConfig(
+        source=tmp_path,
+        prompt="review",
+        backend="acp",
+        mcp_config=None,
+        model="test-model",
+    )
     command = build_acpx_cmd(cfg, tmp_path, "agent", "prompt")
     assert "--mcp-config" not in command
     assert command[command.index("--model") + 1] == "test-model"
