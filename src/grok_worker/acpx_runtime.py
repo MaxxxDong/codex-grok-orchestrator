@@ -116,6 +116,16 @@ def patch_acpx_javascript(text: str, *, windows_cmd_encoding: str = "gbk") -> st
 \t};''',
         '''\tif (platform === "win32") {
 \t\tconst normalizedCommand = command.replace(/^\\s*powershell(?:\\.exe)?(?=\\s)/iu, "pwsh.exe");
+\t\tconst looksLikePowerShell = /[\\r\\n]/u.test(normalizedCommand) || /^\\s*(?:\\$|\\[|(?:Get|Set|New|Remove|Move|Copy|Write|Test|Resolve|ConvertTo|ForEach|Where|Select|Invoke|Start|Stop)-)/iu.test(normalizedCommand);
+\t\tif (looksLikePowerShell) {
+\t\t\tconst utf8Prefix = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);";
+\t\t\treturn {
+\t\t\t\tcommand: "pwsh.exe",
+\t\t\t\targs: ["-NoProfile", "-NonInteractive", "-Command", `${utf8Prefix} ${normalizedCommand}`],
+\t\t\t\tkillProcessGroup: false,
+\t\t\t\tcleanupScope: "windows-tree"
+\t\t\t};
+\t\t}
 \t\treturn {
 \t\tcommand: "cmd.exe",
 \t\targs: [

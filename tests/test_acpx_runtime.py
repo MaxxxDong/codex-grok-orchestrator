@@ -165,6 +165,10 @@ def test_patch_enables_utf8_and_windows_verbatim_shell_arguments() -> None:
     assert 'const child = spawn("pwsh.exe"' in patched
     assert '"-CommandWithArgs", invokeFile' in patched
     assert 'command.replace(/^\\s*powershell' in patched
+    assert "const looksLikePowerShell" in patched
+    assert '/[\\r\\n]/u.test(normalizedCommand)' in patched
+    assert 'command: "pwsh.exe"' in patched
+    assert 'args: ["-NoProfile", "-NonInteractive", "-Command"' in patched
 
 
 def test_patch_batches_cim_and_avoids_duplicate_post_exit_query() -> None:
