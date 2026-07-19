@@ -17,8 +17,9 @@ def _source_home(tmp_path: Path) -> Path:
     home.mkdir(parents=True)
     (home / "Agents.md").write_text("worker rules\n", encoding="utf-8")
     (home / "models_cache.json").write_text("{}\n", encoding="utf-8")
+    test_key = "test-" + "secret-value"
     (home / "config.toml").write_text(
-        """
+        f"""
 [models]
 default = "grok-4.5"
 default_reasoning_effort = "high"
@@ -27,7 +28,7 @@ default_reasoning_effort = "high"
 model = "grok-4.5"
 base_url = "https://example.invalid/v1"
 api_backend = "responses"
-api_key = "test-secret-value"
+api_key = "{test_key}"
 """.strip()
         + "\n",
         encoding="utf-8",

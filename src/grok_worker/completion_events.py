@@ -31,12 +31,26 @@ _ALLOWED_EVENT_KEYS = frozenset(
         "artifact_path",
         "run_id",
         "dispatcher_id",
+        "kind",
+        "exit_code",
+        "artifact_ready",
+        "clone_cleaned",
+        "session_cleaned",
+        "attention_required",
+        "reason_code",
     }
 )
 
 # Required pointer fields with accepted types (artifact_path may be null).
-# run_id / dispatcher_id optional for backward-compatible reads of old rows.
+# Extended fields are optional for backward-compatible reads of old rows.
 _REQUIRED_STRING_KEYS = ("event_id", "task_id", "state", "timestamp")
+_OPTIONAL_STRING_KEYS = ("run_id", "dispatcher_id", "kind", "reason_code")
+_OPTIONAL_BOOL_KEYS = (
+    "artifact_ready",
+    "clone_cleaned",
+    "session_cleaned",
+    "attention_required",
+)
 
 NOTIFICATIONS_DIR = "notifications"
 COMPLETION_EVENTS_LOG = "completion-events.jsonl"
@@ -101,8 +115,15 @@ def _validate_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     art = out["artifact_path"]
     if art is not None and not isinstance(art, str):
         return None
-    for opt in ("run_id", "dispatcher_id"):
+    for opt in _OPTIONAL_STRING_KEYS:
         if opt in out and out[opt] is not None and not isinstance(out[opt], str):
+            return None
+    for opt in _OPTIONAL_BOOL_KEYS:
+        if opt in out and not isinstance(out[opt], bool):
+            return None
+    if "exit_code" in out:
+        exit_code = out["exit_code"]
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
             return None
     return out
 
@@ -130,19 +151,37 @@ def _read_events_unlocked(log_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _has_run_state(events: list[dict[str, Any]], run_id: str, state: str) -> bool:
+def _event_kind(event: dict[str, Any]) -> str:
+    """Treat pre-kind rows as terminal notifications."""
+    value = event.get("kind")
+    return value if isinstance(value, str) and value else "terminal"
+
+
+def _has_run_state_kind(
+    events: list[dict[str, Any]], run_id: str, state: str, kind: str
+) -> bool:
     for event in events:
-        if event.get("run_id") == run_id and event.get("state") == state:
+        if (
+            event.get("run_id") == run_id
+            and event.get("state") == state
+            and _event_kind(event) == kind
+        ):
             return True
     return False
 
 
-def _has_task_state_legacy(events: list[dict[str, Any]], task_id: str, state: str) -> bool:
-    """Legacy dedup when run_id is absent: (task_id, state) among run_id-less rows."""
+def _has_task_state_kind_legacy(
+    events: list[dict[str, Any]], task_id: str, state: str, kind: str
+) -> bool:
+    """Legacy dedup when run_id is absent: (task_id, state, kind)."""
     for event in events:
         if event.get("run_id"):
             continue
-        if event.get("task_id") == task_id and event.get("state") == state:
+        if (
+            event.get("task_id") == task_id
+            and event.get("state") == state
+            and _event_kind(event) == kind
+        ):
             return True
     return False
 
@@ -156,19 +195,27 @@ def emit_completion_event(
     timestamp: str | None = None,
     run_id: str | None = None,
     dispatcher_id: str | None = None,
+    kind: str = "terminal",
+    exit_code: int | None = None,
+    artifact_ready: bool | None = None,
+    clone_cleaned: bool | None = None,
+    session_cleaned: bool | None = None,
+    attention_required: bool | None = None,
+    reason_code: str | None = None,
 ) -> dict[str, Any] | None:
-    """Append one deduplicated terminal-state notification (best-effort).
+    """Append one deduplicated pointer notification (best-effort).
 
-    Dedup key is (run_id, state) when run_id is present; otherwise legacy
-    (task_id, state) among events without run_id. Concurrent appends take an
+    Dedup key is (run_id, state, kind) when run_id is present; otherwise legacy
+    (task_id, state, kind) among events without run_id. Concurrent appends take an
     exclusive lock so no half-line JSON is written. Returns the event dict when
     appended, or None when the same terminal notification already exists,
     arguments are empty, or a notification-boundary I/O/serialization error occurs.
 
     Failures at this seam must not raise into finalize/GC callers that already
-    persisted authoritative lifecycle state.
+    persisted authoritative lifecycle state. ``kind`` is terminal, settled, or
+    attention for current writers; readers preserve unknown future kinds.
     """
-    if not task_id or not state:
+    if not task_id or not state or not kind:
         return None
     try:
         shared = _resolve_shared(shared_cache_root)
@@ -181,11 +228,24 @@ def emit_completion_event(
             "state": str(state),
             "timestamp": ts,
             "artifact_path": artifact_path,
+            "kind": str(kind),
         }
         if run_id:
             event["run_id"] = str(run_id)
         if dispatcher_id:
             event["dispatcher_id"] = str(dispatcher_id)
+        if exit_code is not None:
+            event["exit_code"] = exit_code
+        if artifact_ready is not None:
+            event["artifact_ready"] = artifact_ready
+        if clone_cleaned is not None:
+            event["clone_cleaned"] = clone_cleaned
+        if session_cleaned is not None:
+            event["session_cleaned"] = session_cleaned
+        if attention_required is not None:
+            event["attention_required"] = attention_required
+        if reason_code:
+            event["reason_code"] = str(reason_code)
         validated = _validate_event(event)
         if validated is None:
             return None
@@ -193,9 +253,11 @@ def emit_completion_event(
         with lock:
             existing = _read_events_unlocked(log_path)
             if run_id:
-                if _has_run_state(existing, str(run_id), str(state)):
+                if _has_run_state_kind(existing, str(run_id), str(state), str(kind)):
                     return None
-            elif _has_task_state_legacy(existing, str(task_id), str(state)):
+            elif _has_task_state_kind_legacy(
+                existing, str(task_id), str(state), str(kind)
+            ):
                 return None
             log_path.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"

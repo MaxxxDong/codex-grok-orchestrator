@@ -17,9 +17,11 @@ app = typer.Typer(
 )
 
 app.command("run")(cli_cmds.cmd_run)
+app.command("preflight")(cli_cmds.cmd_preflight)
 app.command("gc")(cli_cmds.cmd_gc)
 app.command("status")(cli_cmds.cmd_status)
 app.command("events")(cli_cmds.cmd_events)
+app.command("watch")(cli_cmds.cmd_watch)
 app.command("health")(cli_cmds.cmd_health)
 app.command("lease-set")(cli_cmds.cmd_lease_set)
 app.command("config-apply")(cli_cmds.cmd_config_apply)

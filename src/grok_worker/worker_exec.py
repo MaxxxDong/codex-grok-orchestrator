@@ -17,11 +17,12 @@ from grok_worker.activity_lease import (
     terminate_process_tree,
 )
 from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
+from grok_worker.completion_events import emit_completion_event
 from grok_worker.constants import OUTPUT_DIR_NAME
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
 from grok_worker.gc import gc_disposable_root
-from grok_worker.grok_state import cleanup_clone_session_state
+from grok_worker.grok_state import cleanup_clone_session_state, clone_session_root
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text, read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState
@@ -262,10 +263,12 @@ def execute_worker(
             dispatcher_id=meta.dispatcher_id,
         )
     finally:
+        unhandled_exception = sys.exc_info()[0] is not None
         signal.signal(signal.SIGINT, prev_int)
         signal.signal(signal.SIGTERM, prev_term)
         wlock.release()
         cache_lease.release()
+        session_root = clone_session_root(clone)
         try:
             cleanup_clone_session_state(clone)
         except (OSError, SafetyError, ValueError) as exc:
@@ -273,6 +276,7 @@ def execute_worker(
                 f"[grok-worker] warning: Grok clone session cleanup skipped: {exc}",
                 file=sys.stderr,
             )
+        session_cleaned = not session_root.exists() and not session_root.is_symlink()
         if not cfg.skip_post_gc:
             try:
                 gc_disposable_root(
@@ -280,3 +284,60 @@ def execute_worker(
                 )
             except (OSError, ValueError) as exc:
                 print(f"[grok-worker] warning: post-run GC skipped: {exc}", file=sys.stderr)
+
+        clone_cleaned = not clone.exists() and not clone.is_symlink()
+        artifact_ready = bool(
+            meta.artifact_complete
+            and meta.artifact_path
+            and Path(meta.artifact_path).is_dir()
+        )
+        terminal_states = {
+            WorkerState.SUCCESS,
+            WorkerState.FAILED,
+            WorkerState.KEEP,
+            WorkerState.LEGACY_IMPORTED,
+        }
+        if meta.state in terminal_states:
+            attention_required = (
+                meta.state == WorkerState.FAILED
+                or not session_cleaned
+                or (meta.state == WorkerState.SUCCESS and not clone_cleaned)
+            )
+            reason_code = None
+            if meta.state == WorkerState.FAILED:
+                reason_code = "terminal_failed"
+            elif not session_cleaned:
+                reason_code = "session_cleanup_incomplete"
+            elif meta.state == WorkerState.SUCCESS and not clone_cleaned:
+                reason_code = "clone_cleanup_incomplete"
+            emit_completion_event(
+                task_id=meta.task_id,
+                state=str(meta.state),
+                artifact_path=meta.artifact_path,
+                shared_cache_root=shared,
+                run_id=meta.run_id,
+                dispatcher_id=meta.dispatcher_id,
+                kind="settled",
+                exit_code=meta.exit_code,
+                artifact_ready=artifact_ready,
+                clone_cleaned=clone_cleaned,
+                session_cleaned=session_cleaned,
+                attention_required=attention_required,
+                reason_code=reason_code,
+            )
+        elif unhandled_exception:
+            emit_completion_event(
+                task_id=meta.task_id,
+                state="worker_crashed",
+                artifact_path=meta.artifact_path,
+                shared_cache_root=shared,
+                run_id=meta.run_id,
+                dispatcher_id=meta.dispatcher_id,
+                kind="attention",
+                exit_code=meta.exit_code,
+                artifact_ready=artifact_ready,
+                clone_cleaned=clone_cleaned,
+                session_cleaned=session_cleaned,
+                attention_required=True,
+                reason_code="unhandled_worker_exception",
+            )

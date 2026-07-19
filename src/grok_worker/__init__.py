@@ -1,3 +1,3 @@
 """Grok worker lifecycle: create, run, finalize, GC, shared deps."""
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"

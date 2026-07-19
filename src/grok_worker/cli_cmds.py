@@ -20,6 +20,7 @@ from grok_worker.capacity import CapacityError, ConcurrencyError
 from grok_worker.completion_events import (
     DEFAULT_EVENT_WAIT_SECONDS,
     EventWaitError,
+    emit_completion_event,
     events_to_payload,
     list_completion_events,
 )
@@ -29,8 +30,15 @@ from grok_worker.constants import (
     DEFAULT_CAP_BYTES,
     DEFAULT_FAILURE_RETAIN_HOURS,
     DEFAULT_HARD_TIMEOUT,
+    DEFAULT_WATCH_WAIT_SECONDS,
+    MAX_EVENT_WAIT_SECONDS,
 )
-from grok_worker.dispatcher import DispatcherConcurrencyError, SameSourceConflictError
+from grok_worker.disclosure import DisclosureError, disclosure_preflight
+from grok_worker.dispatcher import (
+    DispatcherConcurrencyError,
+    SameSourceConflictError,
+    make_run_id,
+)
 from grok_worker.gc import gc_disposable_root, is_active
 from grok_worker.health import collect_health
 from grok_worker.legacy import LegacyClass, LegacyError, import_legacy, list_unmarked
@@ -45,6 +53,7 @@ from grok_worker.paths import (
 from grok_worker.runner import RunConfig, run_worker
 from grok_worker.settings import default_mcp_config, default_model, default_reasoning_effort
 from grok_worker.status import collect_status, format_status_json, format_status_text
+from grok_worker.watch import watch_workers
 
 
 def _shared(shared_cache_root: Path | None) -> Path:
@@ -59,6 +68,45 @@ def _resolve_disposable(disposable_root: Path | None, source: Path | None) -> Pa
     if source is not None:
         return default_disposable_root(Path(source)).resolve()
     return (Path.cwd() / ".grok-disposable").resolve()
+
+
+def _startup_reason_code(exc: BaseException) -> str:
+    name = type(exc).__name__
+    chars: list[str] = []
+    for index, char in enumerate(name):
+        if char.isupper() and index:
+            chars.append("_")
+        chars.append(char.lower())
+    return f"startup_{''.join(chars)}"
+
+
+def _emit_startup_attention(cfg: RunConfig, exc: BaseException, exit_code: int) -> None:
+    emit_completion_event(
+        task_id=cfg.task_id or cfg.run_id or "startup-failed",
+        state="startup_failed",
+        artifact_path=None,
+        shared_cache_root=cfg.shared_cache_root,
+        run_id=cfg.run_id,
+        dispatcher_id=cfg.dispatcher_id,
+        kind="attention",
+        exit_code=exit_code,
+        artifact_ready=False,
+        clone_cleaned=True,
+        session_cleaned=True,
+        attention_required=True,
+        reason_code=_startup_reason_code(exc),
+    )
+
+
+def _find_disclosure_error(exc: BaseException) -> DisclosureError | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, DisclosureError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def cmd_run(
@@ -180,7 +228,7 @@ def cmd_run(
         timeout=timeout,
         hard_timeout=None if hard_timeout == 0 else hard_timeout,
         task_id=task_id,
-        run_id=run_id,
+        run_id=run_id or make_run_id(),
         dispatcher_id=disp_id,
         acpx_bin=acpx_bin,
         agent_bin=agent_bin,
@@ -206,9 +254,19 @@ def cmd_run(
         DispatcherConcurrencyError,
         SameSourceConflictError,
     ) as exc:
+        _emit_startup_attention(cfg, exc, 2)
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
     except Exception as exc:  # noqa: BLE001
+        _emit_startup_attention(cfg, exc, 1)
+        disclosure = _find_disclosure_error(exc)
+        if disclosure is not None and disclosure.blocked_items:
+            typer.echo("disclosure blocked paths (values omitted):", err=True)
+            for item in disclosure.blocked_items:
+                typer.echo(
+                    f"  {item['path']} reason={item['reason_code']}",
+                    err=True,
+                )
         typer.echo(f"run failed: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(
@@ -227,6 +285,30 @@ def cmd_run(
         )
     )
     raise typer.Exit(int(outcome.exit_code))
+
+
+def cmd_preflight(
+    source: Path = typer.Option(..., "--source", help="Repository or source tree to scan"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Scan all disclosure candidates once; report paths/rules, never values."""
+    payload = disclosure_preflight(source.resolve())
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    elif payload["allowed"]:
+        typer.echo(
+            f"allowed dirty={payload.get('included_dirty_count', 0)} "
+            f"excluded={payload.get('excluded_count', 0)}"
+        )
+    else:
+        typer.echo(f"refused blocked={payload['blocked_count']}", err=True)
+        for item in payload["blocked"]:
+            typer.echo(
+                f"  {item['path']} reason={item['reason_code']}",
+                err=True,
+            )
+    if not payload["allowed"]:
+        raise typer.Exit(2)
 
 
 def cmd_lease_set(
@@ -409,7 +491,7 @@ def cmd_events(
     wait_seconds: float = typer.Option(
         DEFAULT_EVENT_WAIT_SECONDS,
         "--wait-seconds",
-        help="Bounded long-poll seconds (default 30; 0=nonblocking; max 120)",
+        help=f"Bounded long-poll seconds (default 30; 0=nonblocking; max {MAX_EVENT_WAIT_SECONDS})",
     ),
     run_id: str | None = typer.Option(None, "--run-id", help="Filter by run_id"),
     dispatcher_id: str | None = typer.Option(
@@ -441,6 +523,61 @@ def cmd_events(
                 f"run={event.get('run_id')} state={event.get('state')} "
                 f"ts={event.get('timestamp')}"
             )
+
+
+def cmd_watch(
+    shared_cache_root: Path | None = typer.Option(None, "--shared-cache-root"),
+    disposable_root: Path | None = typer.Option(None, "--disposable-root"),
+    source: Path | None = typer.Option(None, "--source"),
+    after: str = typer.Option("", "--after", help="Return events after this event_id"),
+    wait_seconds: float = typer.Option(
+        DEFAULT_WATCH_WAIT_SECONDS,
+        "--wait-seconds",
+        help=f"Event-first wait seconds (default 300; max {MAX_EVENT_WAIT_SECONDS})",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id", help="Watch one run"),
+    dispatcher_id: str | None = typer.Option(
+        None, "--dispatcher-id", help="Watch all runs for one dispatcher"
+    ),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Wait for completion/attention; return compact health only on timeout."""
+    disp_id = (
+        dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
+    )
+    try:
+        payload = watch_workers(
+            shared_cache_root=_shared(shared_cache_root),
+            disposable_root=_resolve_disposable(disposable_root, source),
+            after=after or "",
+            wait_seconds=float(wait_seconds),
+            run_id=run_id,
+            dispatcher_id=disp_id,
+        )
+    except (EventWaitError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if payload["kind"] == "events":
+        for event in payload["events"]:
+            typer.echo(
+                f"{event.get('kind', 'terminal')} task={event.get('task_id')} "
+                f"run={event.get('run_id')} state={event.get('state')} "
+                f"attention={event.get('attention_required', False)}"
+            )
+        return
+    typer.echo(
+        f"heartbeat workers={len(payload['workers'])} "
+        f"attention={payload['attention_required']}"
+    )
+    for row in payload["workers"]:
+        typer.echo(
+            f"  task={row.get('task_id')} run={row.get('run_id')} "
+            f"state={row.get('state')} phase={row.get('phase')} "
+            f"last={row.get('last_activity_at')}"
+        )
 
 
 def cmd_health(
