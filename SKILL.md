@@ -224,9 +224,8 @@ Optional one-shot controls:
 - Before creation: reconcile dead workers, run eligible GC, enforce concurrency and capacity.
 - After creation: remeasure; if over cap, roll back only the new clone.
 - Unmarked legacy directories count toward capacity and are never deleted by ordinary GC.
-- A repository-root `.mcp.json` is hidden from both Grok discovery and Git status
-  only during backend execution. The exact original always wins on restore;
-  worker-created same-name content is quarantined under managed metadata.
+- A repository-root `.mcp.json` remains visible to native Grok. Plugin and MCP
+  startup diagnostics are logged but do not become lifecycle launch gates.
 
 ### Shared cache
 
