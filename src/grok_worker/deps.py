@@ -13,6 +13,7 @@ from shutil import which
 
 from grok_worker.locks import fingerprint_lock
 from grok_worker.models import atomic_replace
+from grok_worker.process_launch import hidden_startup_info
 
 SYNC_CONTRACT: tuple[str, ...] = (
     "--frozen",
@@ -173,7 +174,19 @@ def prepare_shared_env(
             env["UV_PROJECT_ENVIRONMENT"] = str(venv)
             cmd = build_uv_sync_cmd(source, has_lock=True)
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    startupinfo=hidden_startup_info(),
+                    creationflags=(
+                        int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
             except subprocess.CalledProcessError as exc:
                 raise DepsError(exc.stderr or str(exc)) from exc
             if not _interpreter_present(venv):
@@ -190,7 +203,7 @@ def prepare_shared_env(
 
 
 def worker_env_exports(env_vars: dict[str, str]) -> str:
-    """Return a dependency contract that cannot create a clone-local environment."""
+    """Return a stable prompt contract for the preconfigured dependency env."""
     if "UV_PROJECT_ENVIRONMENT" in env_vars:
         lines = [
             "# Shared dependency contract (MANDATORY):",
@@ -198,6 +211,7 @@ def worker_env_exports(env_vars: dict[str, str]) -> str:
             "#   Never: uv sync / pip install inside the clone",
             "#   Never create clone-local .venv",
         ]
+        lines.append("#   Dependency paths are already configured in the process environment")
     else:
         lines = [
             "# Dependency preparation is disabled (MANDATORY):",
@@ -205,14 +219,6 @@ def worker_env_exports(env_vars: dict[str, str]) -> str:
             "#   Use only pre-existing system tools or an explicitly supplied absolute interpreter",
             "#   Never create clone-local .venv",
         ]
-    for key in (
-        "UV_CACHE_DIR",
-        "UV_PROJECT_ENVIRONMENT",
-        "PYTHONPATH",
-        "GROK_WORKER_DEPS_FINGERPRINT",
-    ):
-        if key in env_vars:
-            lines.append(f"export {key}={env_vars[key]!r}")
     return "\n".join(lines) + "\n"
 
 

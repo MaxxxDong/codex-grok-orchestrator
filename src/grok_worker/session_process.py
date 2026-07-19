@@ -24,7 +24,6 @@ from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
-from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.run_config import (
     default_agent_bin,
     normalize_agent_command,
@@ -163,13 +162,8 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
     )
     env["GROK_WORKER_LIFECYCLE"] = "1"
     env["GROK_WORKER_TASK_ID"] = state.task_id
-    env["GROK_WORKER_RUNTIME_HOME"] = str(
-        cfg.shared_cache_root / "grok-runtime-home"
-    )
     lease = cache_use_lease(cfg.shared_cache_root)
-    with worker_lock(meta_dir(clone)), lease, isolate_project_mcp(
-        clone, meta_dir(clone)
-    ):
+    with worker_lock(meta_dir(clone)), lease:
         dep_env: dict[str, str] = {}
         if cfg.prepare_deps:
             try:

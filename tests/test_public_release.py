@@ -21,6 +21,7 @@ def test_public_tree_contains_no_personal_home_paths() -> None:
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".uv-cache",
         ".venv",
         "build",
         "dist",
@@ -136,7 +137,9 @@ def test_windows_agent_prefers_canonical_native_grok_binary(tmp_path: Path) -> N
     native.parent.mkdir(parents=True)
     native.touch()
 
-    resolved = resolve_grok_bin(platform="nt", home=tmp_path, path_lookup=lambda _name: "grok.CMD")
+    resolved = resolve_grok_bin(
+        platform="nt", home=tmp_path, path_lookup=lambda _name: "grok.CMD"
+    )
 
     assert resolved == str(native)
 
@@ -148,19 +151,7 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
 
     def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
         if "inspect" in command:
-            profile_config = Path(kwargs["env"]["HOME"]) / ".grok" / "config.toml"
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "configSources": {
-                            "layers": [{"role": "user", "path": str(profile_config)}]
-                        },
-                        "plugins": [],
-                        "mcpServers": [],
-                    }
-                ),
-            )
+            return SimpleNamespace(returncode=0, stdout=json.dumps({}))
         captured["command"] = command
         captured.update(kwargs)
         return SimpleNamespace(returncode=0)
@@ -174,6 +165,7 @@ def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore
     child_env = captured["env"]
     if os.name == "nt":
         assert child_env["GROK_MANAGED_BY_NPM"] == "1"
+        assert captured["creationflags"] == subprocess.CREATE_NO_WINDOW
     startup_info = captured["startupinfo"]
     if os.name == "nt":
         assert isinstance(startup_info, subprocess.STARTUPINFO)
@@ -255,9 +247,9 @@ def test_mcp_config_is_optional_in_acpx_command(tmp_path: Path) -> None:
     cfg = RunConfig(
         source=tmp_path,
         prompt="review",
+        backend="acp",
         mcp_config=None,
         model="test-model",
-        acpx_bin="acpx",
     )
     command = build_acpx_cmd(cfg, tmp_path, "agent", "prompt")
     assert "--mcp-config" not in command

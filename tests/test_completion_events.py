@@ -114,6 +114,7 @@ def test_terminal_finalize_emits_deduped_completion_event(
     cfg = RunConfig(
         source=git_source,
         prompt="emit completion event",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=shared,
@@ -291,6 +292,7 @@ def test_finalize_succeeds_when_notification_io_fails(
     cfg = RunConfig(
         source=git_source,
         prompt="notify fail soft",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=shared,

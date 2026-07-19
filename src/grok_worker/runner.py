@@ -77,8 +77,6 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
     if source is not None:
         protected.insert(0, source)
 
-    if not cfg.skip_pre_gc:
-        gc_disposable_root(disposable, protected=protected, shared_cache_root=shared)
     ensure_cache_capacity(
         CachePolicy(
             root=shared,
@@ -102,13 +100,14 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
 
     try:
         with root_lock(disposable):
-            gc_disposable_root(
-                disposable,
-                protected=protected,
-                clean_tmp=False,
-                already_locked=True,
-                shared_cache_root=shared,
-            )
+            if not cfg.skip_pre_gc:
+                gc_disposable_root(
+                    disposable,
+                    protected=protected,
+                    clean_tmp=False,
+                    already_locked=True,
+                    shared_cache_root=shared,
+                )
             # Atomic capacity reservation before clone/deps.
             if cfg.dispatcher_id:
                 lease = reserve_dispatcher_capacity(

@@ -43,14 +43,13 @@ Deletion targets must be direct managed children of the configured disposable ro
 
 Mode, agent entry, MCP config, model, reasoning profile, and subagent policy form a permission signature. Named-session follow-ups must match the original immutable contract; drift requires a new session.
 
-The agent process uses a managed native-layout Grok home keyed by source-profile
-identity, provider/model configuration, and reasoning effort. Only identical
-profiles share a home; different providers or efforts cannot overwrite one
-another. Provider credentials are injected only into the child environment.
-User marketplaces, plugins, and Grok-level MCP servers are absent by default and
-verified through `grok inspect`; explicit ACP MCP configuration remains a
-separate, observable task input. Native analysis additionally uses Grok's OS
-`read-only` sandbox and `plan` permission mode.
+The agent process uses the user's native Grok home. Existing plugins, MCP servers,
+OAuth state, and provider configuration remain available; the runner never edits
+that configuration. A pre-launch `grok inspect` is advisory and cannot block the
+actual process because an optional extension failure is not proof that Grok is
+unusable. Native analysis additionally uses Grok's OS `read-only` sandbox and
+`plan` permission mode. The disposable clone, not a second user profile, remains
+the repository write boundary.
 
 ### 6. Shared caches need leases
 

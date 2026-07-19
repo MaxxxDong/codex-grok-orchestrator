@@ -10,13 +10,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from grok_worker.grok_profile import (
-    GrokProfileError,
-    isolated_child_environment,
-    prepare_isolated_profile,
-    validate_isolated_profile,
-)
 from grok_worker.process_launch import hidden_startup_info
+from grok_worker.run_config import check_grok_environment
 from grok_worker.settings import default_model, default_reasoning_effort, env_flag, env_text
 
 
@@ -26,7 +21,7 @@ def resolve_grok_bin(
     home: Path | None = None,
     path_lookup: Callable[[str], str | None] = shutil.which,
 ) -> str:
-    """Prefer xAI's canonical native binary over the Windows npm batch trampoline."""
+    """Prefer xAI's canonical native binary over the Windows npm trampoline."""
     effective_platform = platform or os.name
     if effective_platform == "nt":
         native = (home or Path.home()) / ".grok" / "bin" / "grok.exe"
@@ -73,32 +68,30 @@ def main() -> int:
         "GROK_WORKER_ALLOW_DIRECT_AGENT", default=False
     ):
         print(
-            "grok-worker-agent: refusing direct invocation without GROK_WORKER_LIFECYCLE=1",
+            "grok-worker-agent: refusing direct invocation without "
+            "GROK_WORKER_LIFECYCLE=1",
             file=sys.stderr,
         )
         return 2
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        profile = prepare_isolated_profile(
-            model_id=default_model(),
-            reasoning_effort=default_reasoning_effort(),
-        )
-        child_env = isolated_child_environment(_child_environment(), profile)
-        validate_isolated_profile(
-            grok_bin=command[0],
-            profile=profile,
-            environ=child_env,
-            cwd=Path.cwd(),
-            allow_extensions=env_flag("GROK_WORKER_ALLOW_GROK_EXTENSIONS", default=False),
-        )
+        child_env = _child_environment()
+        warning = check_grok_environment(command[0], cwd=Path.cwd(), environ=child_env)
+        if warning:
+            print(f"grok-worker-agent: warning: {warning}", file=sys.stderr)
         completed = subprocess.run(
             command,
             env=child_env,
             check=False,
             startupinfo=hidden_startup_info(),
+            creationflags=(
+                int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if os.name == "nt"
+                else 0
+            ),
         )
-    except (GrokProfileError, OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127
     finally:

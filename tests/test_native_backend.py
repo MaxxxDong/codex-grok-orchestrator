@@ -13,8 +13,8 @@ from grok_worker.runner import RunConfig, run_worker
 
 
 def _source_home(tmp_path: Path) -> Path:
-    home = tmp_path / "source-grok"
-    home.mkdir()
+    home = tmp_path / "home" / ".grok"
+    home.mkdir(parents=True)
     (home / "Agents.md").write_text("worker rules\n", encoding="utf-8")
     (home / "models_cache.json").write_text("{}\n", encoding="utf-8")
     (home / "config.toml").write_text(
@@ -35,7 +35,9 @@ api_key = "test-secret-value"
     return home
 
 
-def _fake_grok(bin_dir: Path, *, downgrade_reasoning: bool = False) -> Path:
+def _fake_grok(
+    bin_dir: Path, *, downgrade_reasoning: bool = False, inspect_exit: int = 0
+) -> Path:
     if os.name == "nt":
         grok = bin_dir / "grok.cmd"
         grok.parent.mkdir(parents=True, exist_ok=True)
@@ -48,25 +50,20 @@ def _fake_grok(bin_dir: Path, *, downgrade_reasoning: bool = False) -> Path:
             "@echo off\r\n"
             "setlocal EnableDelayedExpansion\r\n"
             "if \"%~1\"==\"inspect\" (\r\n"
-            "  set \"config=%USERPROFILE%\\.grok\\config.toml\"\r\n"
-            "  set \"config=!config:\\=\\\\!\"\r\n"
-            "  echo {\"configSources\":{\"layers\":[{\"role\":\"user\","
-            "\"path\":\"!config!\"}]},\"plugins\":[],\"mcpServers\":[]}\r\n"
-            "  exit /b 0\r\n"
+            f"  exit /b {inspect_exit}\r\n"
             ")\r\n"
             "set \"cwd=\"\r\n"
             "set \"args=\"\r\n"
             ":args\r\n"
             "if \"%~1\"==\"\" goto run\r\n"
             "set \"args=!args! %~1\"\r\n"
-            "if \"%~1\"==\"--cwd\" (\r\n"
-            "  set \"cwd=%~2\"\r\n"
-            ")\r\n"
+            "if \"%~1\"==\"--cwd\" set \"cwd=%~2\"\r\n"
             "shift\r\n"
             "goto args\r\n"
             ":run\r\n"
             "if not defined cwd exit /b 90\r\n"
-            "if exist \"!cwd!\\.mcp.json\" exit /b 91\r\n"
+            "set \"mcp_state=absent\"\r\n"
+            "if exist \"!cwd!\\.mcp.json\" set \"mcp_state=present\"\r\n"
             "mkdir \"!cwd!\\.grok-output\\verification\" 2>nul\r\n"
             "> \"!cwd!\\.grok-output\\verification\\verify.log\" echo verification passed\r\n"
             "> \"!cwd!\\.grok-output\\result.json\" echo {\"schema_version\":1,"
@@ -80,6 +77,7 @@ def _fake_grok(bin_dir: Path, *, downgrade_reasoning: bool = False) -> Path:
             "  echo !args!\r\n"
             "  echo %UV_CACHE_DIR%\r\n"
             "  echo %GROK_SHARED_VENV_ROOT%\r\n"
+            "  echo !mcp_state!\r\n"
             ")\r\n"
             "echo {\"text\":\"native ok\",\"thought\":\"checked\","
             "\"usage\":{\"input_tokens\":4096,\"cache_read_input_tokens\":2048,"
@@ -112,7 +110,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 test -n "$cwd"
-test ! -e "$cwd/.mcp.json"
+mcp_state=absent
+if [ -e "$cwd/.mcp.json" ]; then mcp_state=present; fi
 mkdir -p "$cwd/.grok-output/verification"
 printf 'verification passed\n' > "$cwd/.grok-output/verification/verify.log"
 cat > "$cwd/.grok-output/result.json" <<'JSON'
@@ -129,8 +128,8 @@ cat > "$cwd/.grok-output/result.json" <<'JSON'
   }]
 }
 JSON
-printf '%s\n%s\n%s\n%s\n%s\n' \
-  "$HOME" "${GROK_HOME-unset}" "$args" "$UV_CACHE_DIR" "$GROK_SHARED_VENV_ROOT" \
+printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "$HOME" "${GROK_HOME-unset}" "$args" "$UV_CACHE_DIR" "$GROK_SHARED_VENV_ROOT" "$mcp_state" \
   > "$cwd/.grok-output/native-env.txt"
 printf '%s%s\n' \
   '{"text":"native ok","thought":"checked","usage":{"input_tokens":4096,' \
@@ -143,7 +142,7 @@ printf '%s%s\n' \
     return grok
 
 
-def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
+def test_native_backend_uses_source_home_high_and_project_mcp(
     git_source: Path,
     tmp_roots: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -165,7 +164,7 @@ def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
     )
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
-    monkeypatch.setenv("GROK_WORKER_SOURCE_GROK_HOME", str(source_home))
+    monkeypatch.setenv("HOME", str(source_home.parent))
 
     outcome = run_worker(
         RunConfig(
@@ -188,17 +187,23 @@ def test_native_backend_uses_high_stable_home_and_masks_project_mcp(
     assert outcome.state == "keep"
     clone = Path(outcome.clone_path or "")
     assert (clone / ".mcp.json").is_file()
-    home, grok_home, args, uv_cache, shared_venvs = (
+    home, grok_home, args, uv_cache, shared_venvs, mcp_state = (
         (clone / ".grok-output/native-env.txt").read_text(encoding="utf-8").splitlines()
     )
-    runtime_home = Path(home)
-    assert runtime_home.parent == tmp_roots["shared"] / "grok-runtime-home/profiles"
-    assert len(runtime_home.name) == 16
+    assert Path(home) == source_home.parent
     assert grok_home == "unset"
     assert "--reasoning-effort high" in args
+    assert "--no-memory" in args
     assert "--prompt-file" in args
     assert Path(uv_cache) == clone / ".grok-output/.runtime-cache/uv"
     assert Path(shared_venvs) == tmp_roots["shared"] / "venvs"
+    assert mcp_state == "present"
+    prompt = (clone / ".grok-worker/prompt-one-shot.md").read_text(encoding="utf-8")
+    assert prompt.startswith("# Grok Worker Stable Base v1")
+    assert "Dependency preparation is disabled" in prompt
+    assert "Do not run uv, uv run, uv sync, pip" in prompt
+    assert str(clone) not in prompt
+    assert str(tmp_roots["shared"]) not in prompt
 
     metrics = [
         json.loads(line)
@@ -220,7 +225,7 @@ def test_native_backend_rejects_reasoning_downgrade(
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
-    monkeypatch.setenv("GROK_WORKER_SOURCE_GROK_HOME", str(source_home))
+    monkeypatch.setenv("HOME", str(source_home.parent))
 
     outcome = run_worker(
         RunConfig(
@@ -241,6 +246,37 @@ def test_native_backend_rejects_reasoning_downgrade(
     assert "ignored requested reasoning effort" in outcome.message
 
 
+def test_environment_check_failure_warns_but_does_not_block_launch(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin", inspect_exit=9)
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="implement and verify",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-preflight-warning",
+            keep_reason="inspect warning log",
+            skip_post_gc=True,
+        )
+    )
+
+    assert outcome.exit_code == 0
+    worker_log = Path(outcome.artifact_path or "") / "worker.log"
+    assert "environment check exited 9" in worker_log.read_text(encoding="utf-8")
+
+
 def test_retained_task_id_collision_allocates_fresh_clone(
     git_source: Path,
     tmp_roots: dict[str, Path],
@@ -252,6 +288,7 @@ def test_retained_task_id_collision_allocates_fresh_clone(
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
+        backend="acp",
         acpx_bin=str(path_with_fake_acpx),
         prepare_deps=False,
         task_id="same-task",

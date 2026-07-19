@@ -264,6 +264,7 @@ def test_windows_metadata_failure_reaps_started_acpx(
         prepare_deps=False,
         task_id="orphan-test",
         skip_post_gc=True,
+        backend="acp",
         acpx_bin="acpx",
     )
 

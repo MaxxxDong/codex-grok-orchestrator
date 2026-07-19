@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +21,7 @@ from grok_worker.constants import OUTPUT_DIR_NAME
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.finalize import finalize_run, mark_failed, try_collect
 from grok_worker.gc import gc_disposable_root
-from grok_worker.grok_profile import (
-    GrokProfileError,
-    isolated_child_environment,
-    prepare_isolated_profile,
-    validate_isolated_profile,
-)
+from grok_worker.grok_state import cleanup_clone_session_state
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text, read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState
@@ -35,15 +31,16 @@ from grok_worker.process_identity import (
     process_start_token,
     windows_descendant_pids,
 )
-from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.prompt_cache import OneShotModeError, build_one_shot_prompt
 from grok_worker.run_config import (
     RunConfig,
     RunOutcome,
     build_acpx_cmd,
     build_native_cmd,
+    check_grok_environment,
     default_grok_bin,
 )
+from grok_worker.safety import SafetyError
 from grok_worker.settings import agent_policy_environment
 
 
@@ -52,13 +49,13 @@ class Interrupt(Exception):
 
 
 def _reap_process_tree(proc: subprocess.Popen[Any] | None) -> None:
-    """Best-effort bounded cleanup for an ACP process and its descendants."""
+    """Best-effort bounded cleanup for a backend process and its descendants."""
     if proc is None:
         return
     if os.name == "nt":
         targets = [proc.pid] if proc.poll() is None else []
         targets.extend(windows_descendant_pids(proc.pid))
-        for pid in targets:
+        for pid in dict.fromkeys(targets):
             try:
                 subprocess.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -71,11 +68,10 @@ def _reap_process_tree(proc: subprocess.Popen[Any] | None) -> None:
                 pass
     if proc.poll() is not None:
         return
-    if proc.poll() is None:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+    try:
+        proc.terminate()
+    except OSError:
+        pass
     try:
         proc.wait(timeout=5)
     except (OSError, subprocess.TimeoutExpired):
@@ -125,7 +121,7 @@ def execute_worker(
         if cfg.prepare_deps:
             try:
                 dep_env.update(prepare_shared_env(clone, shared))
-            except DepsError as exc:
+            except (DepsError, OSError) as exc:
                 startup_warnings.append(f"dependency prewarm skipped: {exc}")
         if cfg.backend == "native":
             # Grok's workspace sandbox cannot write the host-level shared cache.
@@ -142,8 +138,13 @@ def execute_worker(
                 }
             )
         oneshot_mode = "research" if cfg.prompt_only else cfg.mode
+        task_prompt = cfg.prompt
+        if dep_env:
+            # Keep the Skill-owned prefix byte-stable across clones and tasks.
+            # Runtime paths live in the child environment, never at prompt byte 0.
+            task_prompt = worker_env_exports(dep_env) + "\n" + task_prompt
         try:
-            prompt = build_one_shot_prompt(None, oneshot_mode, cfg.prompt)
+            prompt = build_one_shot_prompt(None, oneshot_mode, task_prompt)
         except OneShotModeError as exc:
             mark_failed(
                 meta,
@@ -166,9 +167,6 @@ def execute_worker(
                 run_id=meta.run_id,
                 dispatcher_id=meta.dispatcher_id,
             )
-        if dep_env:
-            prompt = worker_env_exports(dep_env) + "\n" + prompt
-
         rpid, rtok = capture_identity()
         meta.state = WorkerState.RUNNING
         meta.runner_pid = rpid
@@ -191,7 +189,6 @@ def execute_worker(
         )
         env["GROK_WORKER_LIFECYCLE"] = "1"
         env["GROK_WORKER_TASK_ID"] = task_id
-        env["GROK_WORKER_RUNTIME_HOME"] = str(shared / "grok-runtime-home")
 
         warning_text = "".join(f"[grok-worker] warning: {item}\n" for item in startup_warnings)
         agent_log.write_text(warning_text, encoding="utf-8")
@@ -205,47 +202,37 @@ def execute_worker(
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))
 
-        with isolate_project_mcp(clone, meta_dir(clone)) as project_mcp_masked:
-            if project_mcp_masked:
-                startup_warnings.append("repository .mcp.json masked during Grok startup")
-            try:
-                if cfg.backend == "native":
-                    profile = prepare_isolated_profile(
-                        model_id=cfg.model,
-                        reasoning_effort=cfg.reasoning_effort,
-                        environ=env,
-                    )
-                    child_env = isolated_child_environment(env, profile)
-                    grok_bin = default_grok_bin()
-                    validate_isolated_profile(
-                        grok_bin=grok_bin,
-                        profile=profile,
-                        environ=child_env,
-                        cwd=clone,
-                        allow_extensions=False,
-                    )
-                    cmd = build_native_cmd(cfg, clone, prompt_file)
-                else:
-                    child_env = env
-                    cmd = build_acpx_cmd(cfg, clone, agent, prompt)
-                process_result = run_with_activity_lease(
-                    cmd,
-                    clone=clone,
-                    log=agent_log,
-                    env=child_env,
-                    idle_timeout_seconds=cfg.timeout,
-                    hard_timeout_seconds=cfg.hard_timeout,
-                    on_start=_record_child,
+        try:
+            child_env = env
+            if cfg.backend == "native":
+                grok_bin = default_grok_bin()
+                preflight_warning = check_grok_environment(
+                    grok_bin, cwd=clone, environ=child_env
                 )
-            except PermissionError:
-                # Lifecycle registration failures are integrity failures, not
-                # backend startup failures. Propagate after finally reaps the
-                # already-started Windows process tree.
-                raise
-            except (GrokProfileError, FileNotFoundError, OSError, ValueError) as exc:
-                with agent_log.open("a", encoding="utf-8") as stream:
-                    stream.write(f"[grok-worker] startup failed: {exc}\n")
-                process_result = LeasedProcessResult(127)
+                if preflight_warning:
+                    startup_warnings.append(preflight_warning)
+                    with agent_log.open("a", encoding="utf-8") as stream:
+                        stream.write(f"[grok-worker] warning: {preflight_warning}\n")
+                cmd = build_native_cmd(cfg, clone, prompt_file)
+            else:
+                cmd = build_acpx_cmd(cfg, clone, agent, prompt)
+            process_result = run_with_activity_lease(
+                cmd,
+                clone=clone,
+                log=agent_log,
+                env=child_env,
+                idle_timeout_seconds=cfg.timeout,
+                hard_timeout_seconds=cfg.hard_timeout,
+                on_start=_record_child,
+            )
+        except PermissionError:
+            # Lifecycle registration is an integrity boundary. Re-raise so the
+            # finally block reaps an already-started Windows process tree.
+            raise
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            with agent_log.open("a", encoding="utf-8") as stream:
+                stream.write(f"[grok-worker] startup failed: {exc}\n")
+            process_result = LeasedProcessResult(127)
         worker_exit = process_result.exit_code
         child_proc = None
         meta.acpx_exit_code = worker_exit
@@ -325,5 +312,17 @@ def execute_worker(
         signal.signal(signal.SIGTERM, prev_term)
         wlock.release()
         cache_lease.release()
+        try:
+            cleanup_clone_session_state(clone)
+        except (OSError, SafetyError, ValueError) as exc:
+            print(
+                f"[grok-worker] warning: Grok clone session cleanup skipped: {exc}",
+                file=sys.stderr,
+            )
         if not cfg.skip_post_gc:
-            gc_disposable_root(disposable, protected=protected, shared_cache_root=shared)
+            try:
+                gc_disposable_root(
+                    disposable, protected=protected, shared_cache_root=shared
+                )
+            except (OSError, ValueError) as exc:
+                print(f"[grok-worker] warning: post-run GC skipped: {exc}", file=sys.stderr)

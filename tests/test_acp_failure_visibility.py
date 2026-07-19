@@ -40,6 +40,7 @@ def test_runtime_internal_error_visible_with_missing_structured_result(
         RunConfig(
             source=git_source,
             prompt="x",
+            backend="acp",
             disposable_root=tmp_roots["disposable"],
             artifact_root=tmp_roots["artifacts"],
             shared_cache_root=tmp_roots["shared"],

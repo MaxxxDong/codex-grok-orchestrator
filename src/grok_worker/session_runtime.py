@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from grok_worker.activity_lease import LeaseError, read_lease
@@ -17,13 +18,14 @@ from grok_worker.dispatcher import (
 )
 from grok_worker.finalize import finalize_run
 from grok_worker.gc import gc_disposable_root
+from grok_worker.grok_state import cleanup_clone_session_state
 from grok_worker.locks import root_lock, worker_lock
 from grok_worker.metrics import read_task_metrics
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
 from grok_worker.paths import meta_dir, meta_path
-from grok_worker.project_mcp import isolate_project_mcp
 from grok_worker.prompt_cache import Role, TaskManifest, build_context_pack, build_prompt
 from grok_worker.run_config import RunConfig, RunOutcome
+from grok_worker.safety import SafetyError
 from grok_worker.session_commands import build_close_cmd
 from grok_worker.session_process import (
     SessionConfig,
@@ -196,16 +198,13 @@ def finalize_session(cfg: SessionConfig) -> SessionOutcome:
     )
     close_env["GROK_WORKER_LIFECYCLE"] = "1"
     close_env["GROK_WORKER_TASK_ID"] = state.task_id
-    close_env["GROK_WORKER_RUNTIME_HOME"] = str(
-        cfg.shared_cache_root / "grok-runtime-home"
-    )
 
     lease: DispatcherLease | None = None
     # Bound before invoke so a raising close cannot UnboundLocalError later.
     close_exit = 1
     try:
         lease = _acquire_session_invocation_lease(cfg)
-        with worker_lock(meta_dir(clone)), isolate_project_mcp(clone, meta_dir(clone)):
+        with worker_lock(meta_dir(clone)):
             close_exit = invoke(
                 build_close_cmd(common_command(cfg, clone), state.session_name),
                 log,
@@ -221,6 +220,7 @@ def finalize_session(cfg: SessionConfig) -> SessionOutcome:
         run_cfg = RunConfig(
             source=cfg.source,
             prompt="",
+            backend="acp",
             disposable_root=cfg.disposable_root,
             artifact_root=cfg.artifact_root,
             shared_cache_root=cfg.shared_cache_root,
@@ -274,5 +274,12 @@ def finalize_session(cfg: SessionConfig) -> SessionOutcome:
             result.artifact_path,
         )
     finally:
+        try:
+            cleanup_clone_session_state(clone, close_env)
+        except (OSError, SafetyError, ValueError) as exc:
+            print(
+                f"[grok-worker] warning: Grok named-session cleanup skipped: {exc}",
+                file=sys.stderr,
+            )
         if lease is not None:
             lease.release()

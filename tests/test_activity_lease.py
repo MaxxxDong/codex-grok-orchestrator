@@ -37,15 +37,15 @@ def _python_sleep(seconds: float) -> list[str]:
     return [sys.executable, "-c", f"import time; time.sleep({seconds})"]
 
 
-def test_activity_probe_uses_child_managed_home(tmp_path: Path) -> None:
+def test_activity_probe_uses_native_grok_home(tmp_path: Path) -> None:
     clone = _clone(tmp_path)
-    managed_home = tmp_path / "managed-home"
+    home = tmp_path / "home"
     probe = ActivityProbe(
         clone,
-        environ={"GROK_WORKER_RUNTIME_HOME": str(managed_home)},
+        environ={"HOME": str(home)},
     )
 
-    assert probe.session_root.is_relative_to(managed_home / ".grok" / "sessions")
+    assert probe.session_root.is_relative_to(home / ".grok" / "sessions")
 
 
 def test_activity_lease_uses_hidden_windows_launch_policy(

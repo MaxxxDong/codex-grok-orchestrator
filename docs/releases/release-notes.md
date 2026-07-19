@@ -7,6 +7,38 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-19 — Native Grok, bounded caches, simple startup / 原生配置与简化启动
+
+**Version:** `grok-worker` 0.5.2
+
+One-shot CLI and library calls now default to native Grok Build and use the user's
+normal Grok home. Plugins, MCP servers, OAuth state, provider settings, bundled
+resources, explicit High reasoning, and prompt-cache eligibility remain available.
+Repository `.mcp.json` is visible. A lightweight environment inspection runs first,
+but it is advisory: extension errors are logged and the actual Grok launch proceeds.
+
+The Windows-native integration keeps managed ACP as the CLI one-shot default
+because the current Native workspace sandbox can deny terminal process creation.
+Native remains explicitly selectable; Windows retains its managed acpx,
+PowerShell 7/UTF-8, hidden-process, and process-tree cleanup policies.
+
+The launcher validates cache ownership, rejects symlinks, enforces private mode,
+and falls back when the host cache is sandbox-read-only. It prefers an existing
+virtual environment, avoiding network access during normal starts. Source-checkout
+development uses ignored `.uv-cache/`.
+
+Mutable UV/PIP/NPM/Poetry caches stay inside the disposable clone; prepared
+environments and package downloads remain shared and leased. One-shot native calls
+use `--no-memory` and remove only the exact clone-keyed Grok session bucket after
+exit. Provider cache metrics remain observable, but a different clone cwd may miss
+even when the stable prompt is identical. Worker concurrency remains ten per
+dispatcher; each Grok prompt limits internal subagents to three.
+
+Release verification: 241 tests, Ruff, strict mypy, offline sdist/wheel build,
+clean-wheel CLI smoke, and a native Grok Worker smoke.
+
+---
+
 ## 2026-07-19 — Native sandbox cache hotfix / 原生沙箱缓存热修
 
 **Version:** `grok-worker` 0.5.1

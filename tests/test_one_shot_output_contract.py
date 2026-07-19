@@ -294,6 +294,7 @@ def test_execute_worker_passes_injected_one_shot_prompt_to_acp(
     cfg = RunConfig(
         source=git_source,
         prompt=TASK_IMPL,
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],

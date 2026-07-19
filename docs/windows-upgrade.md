@@ -1,24 +1,28 @@
-# Windows native upgrade: 0.3/0.4 to 0.5.1
+# Windows native upgrade: 0.3/0.4/0.5.1 to 0.5.2
 
 This integration branch supports native Windows 10/11. It does not use WSL as
 the default or as a fallback. The canonical source checkout, installed Windows
 executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
 the only active runtime chain.
 
-## What changes in 0.5.1
+## What changes in 0.5.2
 
 - One-shot `grok-worker run` defaults to the proven managed ACP chain on
   Windows. Native Grok Build headless remains available with `--backend native`.
 - Named sessions also use the managed acpx runtime.
-- Provider/model/effort-specific profiles preserve explicit High reasoning and
-  reject reasoning downgrade warnings.
+- Native runs now use the normal Windows `%USERPROFILE%\.grok` state, pass model
+  and High effort explicitly, and reject reasoning downgrade warnings.
+- Native plugin/MCP inspection is advisory; repository `.mcp.json` remains
+  visible. One-shot Native adds `--no-memory` and removes only the session bucket
+  keyed by the disposable clone after completion.
 - Safe staged, unstaged, and untracked files are snapshotted automatically.
 - Retained task-ID collisions allocate a fresh clone, transient clone failures
   receive one clean retry, and dependency prewarm failures become warnings.
-- Repository `.mcp.json` is masked only during backend execution and restored
-  before artifact capture.
 - Native token/cache/reasoning metrics, backend/process health, writable
   clone-local tool caches, and `grok-worker --version` are available.
+- The source launcher recovers from an unwritable default cache, while explicit
+  unsafe cache paths still fail closed. Dependency-disabled tasks explicitly
+  forbid uv/pip environment creation.
 - Sensitive files, escaping symlinks/reparse points, artifact verification, and
   cleanup ownership remain hard gates.
 
@@ -39,7 +43,7 @@ the only active runtime chain.
    managed acpx status, and a hash of the Grok config.
 2. Back up the full canonical repository (including `.git` and dirty files) and
    the installed uv tool plus both executables.
-3. Fetch and verify the signed/annotated `v0.5.1` tag and Release.
+3. Fetch and verify the annotated `v0.5.2` tag and Release.
 4. Merge or port the upstream tag into an isolated worktree based on the
    existing Windows-native branch. Do not replace the Windows branch with a
    plain tag checkout.
@@ -50,7 +54,7 @@ the only active runtime chain.
    and one real Grok 4.5/high end-to-end canary.
 7. Install from the verified canonical source and recheck executable hashes,
    version, junction target, managed runtime, config hash, artifacts, metrics,
-   `.mcp.json` restoration, and clone cleanup.
+   `.mcp.json` visibility/integrity, Native session cleanup, and clone cleanup.
 
 ## Native preflight
 
@@ -75,12 +79,12 @@ snapshotted safely; secret-shaped files and escaping links must still be
 rejected.
 
 ```powershell
-$env:GROK_WORKER_DISPATCHER_ID = "windows-v051-canary"
+$env:GROK_WORKER_DISPATCHER_ID = "windows-v052-canary"
 grok-worker run `
   --backend acp `
   --source $repo `
   --mode implementation `
-  --task-id windows-v051-acp-canary `
+  --task-id windows-v052-acp-canary `
   --reasoning-effort high `
   --max-workers 24 `
   --prompt-file $promptFile
@@ -89,7 +93,7 @@ grok-worker run `
 Accept a successful implementation only when the backend exits 0 and the
 external artifact directory contains exactly `changes.patch`, `worker.log`, and
 `verification.txt`. Confirm the structured result, tool receipts,
-reasoning/cache metrics, restored `.mcp.json`, and eligible clone cleanup.
+reasoning/cache metrics, unchanged `.mcp.json`, and eligible clone cleanup.
 
 ## Rollback
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,10 +52,9 @@ class RunConfig:
     dispatcher_id: str | None = None
     run_id: str | None = None
     prompt_only: bool = False
-    # Library callers keep the v0.4 ACP default. The public `run` CLI passes
-    # native explicitly, so existing embedded callers do not start real Grok
-    # unexpectedly during an upgrade.
-    backend: str = "acp"
+    # One-shot execution uses Grok Build headless directly. ACP remains an
+    # explicit compatibility backend and powers named sessions in v0.5.
+    backend: str = "native"
 
     def __post_init__(self) -> None:
         if self.max_workers < 1:
@@ -163,13 +163,7 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
 
 
 def default_one_shot_backend() -> str:
-    """Use the proven ACP tool chain by default on native Windows.
-
-    Grok Build 0.2.97 native headless can read and write files on Windows, but
-    its workspace sandbox may reject terminal processes with ``WinError 5``.
-    Keep native headless available explicitly while preserving the reliable
-    managed-ACP default for Windows implementation work.
-    """
+    """Use the proven managed ACP tool chain by default on native Windows."""
     return "acp" if sys.platform == "win32" else "native"
 
 
@@ -185,6 +179,37 @@ def default_grok_bin() -> str:
     if configured:
         return configured
     raise FileNotFoundError("cannot locate grok; install Grok Build or set PATH")
+
+
+def check_grok_environment(
+    grok_bin: str, *, cwd: Path, environ: dict[str, str]
+) -> str | None:
+    """Run an advisory native-config probe without gating plugins or MCP."""
+    try:
+        completed = subprocess.run(
+            [grok_bin, "inspect", "--json"],
+            cwd=cwd,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            creationflags=(
+                int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if sys.platform == "win32"
+                else 0
+            ),
+        )
+    except subprocess.TimeoutExpired:
+        return "Grok environment check timed out; continuing to actual launch"
+    except OSError as exc:
+        raise FileNotFoundError(f"cannot start Grok Build: {exc}") from exc
+    if completed.returncode != 0:
+        return (
+            f"Grok environment check exited {completed.returncode}; "
+            "continuing so plugin/MCP diagnostics remain non-blocking"
+        )
+    return None
 
 
 def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str]:
@@ -210,5 +235,7 @@ def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str
     )
     if not cfg.allow_subagents:
         cmd.append("--no-subagents")
-    cmd.extend(["--output-format", "json", "--prompt-file", str(prompt_file)])
+    cmd.extend(
+        ["--no-memory", "--output-format", "json", "--prompt-file", str(prompt_file)]
+    )
     return cmd

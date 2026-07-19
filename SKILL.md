@@ -16,14 +16,18 @@ the managed ACP path on Windows and native Grok Build headless elsewhere. Do not
 - Model comes from `GROK_WORKER_MODEL` and defaults to `grok-4.5`.
 - Reasoning comes from `GROK_WORKER_REASONING_EFFORT` and defaults to `high`.
 - Never Fast and never silently fall back to another model.
-- Every Worker runs with an isolated runtime `HOME` and normal `~/.grok` layout
-  derived from the canonical model config. `GROK_HOME` override mode is not used
-  because Grok Build 0.2.103 loses reasoning/cache behavior there. API keys stay
-  environment-only, `Agents.md` stays linked, and plugins/MCP are disabled.
-- Profile reuse requires the same source profile, provider/model configuration,
-  and effort. Same model IDs on different endpoints never share a runtime home.
-- Native profiles explicitly declare the requested reasoning capability. If
-  Grok says it ignored the requested effort, the run fails and is retained.
+- Workers use the user's native `HOME` and `~/.grok` directly. Configured plugins,
+  MCP servers, OAuth state, bundled resources, and provider settings stay available.
+  A lightweight `grok inspect --json` check runs before launch, but failure only
+  warns; the actual Grok process remains the availability test.
+- The command always passes the selected model and reasoning effort explicitly.
+  If Grok says it ignored the requested effort, the run fails and is retained.
+- One-shot native runs add `--no-memory`; after the process exits, only the exact
+  global Grok session bucket keyed by that disposable clone is removed. Normal
+  interactive Grok sessions and plugin installations are untouched.
+- Global plugins and repository MCP definitions run with the task's permissions.
+  Treat them as trusted inputs for implementation mode; a broken extension warns
+  or loses that tool, but does not become a lifecycle startup gate.
 - The selected model also handles session summaries; do not restore the
   incompatible built-in `grok-build` auxiliary route in relay-backed profiles.
 - Each Grok worker may run at most 3 subagents concurrently for independent work.
@@ -244,9 +248,8 @@ Optional one-shot controls:
 - Before creation: reconcile dead workers, run eligible GC, enforce concurrency and capacity.
 - After creation: remeasure; if over cap, roll back only the new clone.
 - Unmarked legacy directories count toward capacity and are never deleted by ordinary GC.
-- A repository-root `.mcp.json` is hidden from both Grok discovery and Git status
-  only during backend execution. The exact original always wins on restore;
-  worker-created same-name content is quarantined under managed metadata.
+- A repository-root `.mcp.json` remains visible to native Grok. Plugin and MCP
+  startup diagnostics are logged but do not become lifecycle launch gates.
 
 ### Shared cache
 
@@ -352,10 +355,10 @@ Only delete a successful clone when:
 Write per-run metrics to `metrics/worker-runs.jsonl`. Native JSON output exposes
 input, cached-read, output, and reasoning tokens when Grok reports them. A cache
 ratio is observable only when provider output contains both input-token and
-cached-read-token values. Stable profiles/prefixes and named session reuse are
-optimization mechanisms, not proof of a cache hit; relay-side cache thresholds
-and eviction can still make identical calls miss. Report unobservable metrics as
-unobservable.
+cached-read-token values. The native profile and named-session reuse preserve
+cache eligibility, but different disposable clone paths change Grok's cwd context
+and may miss across one-shot runs. Relay thresholds and eviction can also make
+identical calls miss. Report unobservable metrics as unobservable.
 
 ## Legacy and migration
 
