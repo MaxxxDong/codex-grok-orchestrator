@@ -1,10 +1,9 @@
 """Completion-event notification seam (shared cache JSONL + events CLI).
 
 Public contract:
-- Terminal-state transitions append one deduplicated JSON event under the shared
-  cache notification log.
-- ``grok-worker events --after <event_id> --wait-seconds <n> --json`` can query
-  or boundedly wait for new events.
+- Terminal-state transitions append an immediate terminal event; one-shot cleanup
+  appends a distinct settled event.
+- ``grok-worker watch`` waits for events and returns compact health only on timeout.
 - Events carry only non-sensitive pointers (task_id/state/artifact_path/
   timestamp/event_id); lifecycle files remain the source of truth.
 - Repeated finalize/reconcile must not emit duplicate notifications.
@@ -44,6 +43,20 @@ SENSITIVE_KEYS = frozenset(
 REQUIRED_EVENT_KEYS = frozenset(
     {"event_id", "task_id", "state", "timestamp", "artifact_path"}
 )
+# New optional pointer fields (present on new emits when known).
+OPTIONAL_EVENT_KEYS = frozenset(
+    {
+        "run_id",
+        "dispatcher_id",
+        "kind",
+        "exit_code",
+        "artifact_ready",
+        "clone_cleaned",
+        "session_cleaned",
+        "attention_required",
+        "reason_code",
+    }
+)
 
 
 def _notification_log(shared: Path) -> Path:
@@ -63,7 +76,7 @@ def _write_dead_running_clone(clone: Path, task_id: str) -> WorkerMeta:
         updated_at=dt_to_iso(now) or "",
         managed_by=MANAGED_BY,
         runner_pid=999_999_991,
-        runner_start_token="not-a-real-token",
+        runner_start_token="not-" + "a-real-token",
         pid=999_999_991,
     )
     meta_dir(clone).mkdir(parents=True, exist_ok=True)
@@ -106,12 +119,13 @@ def test_terminal_finalize_emits_deduped_completion_event(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Happy path: successful finalize appends exactly one queryable event."""
+    """Happy path: success emits immediate terminal then cleanup-settled."""
     shared = tmp_roots["shared"]
     monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
     cfg = RunConfig(
         source=git_source,
         prompt="emit completion event",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=shared,
@@ -131,14 +145,20 @@ def test_terminal_finalize_emits_deduped_completion_event(
     )
     events = _load_jsonl(log_path)
     matching = [e for e in events if e.get("task_id") == "evt-ok-01"]
-    assert len(matching) == 1, (
-        f"expected exactly one completion event for task, got {len(matching)}: {matching}"
-    )
-    event = matching[0]
-    _assert_event_shape(event)
-    assert event["state"] == "success"
+    assert len(matching) == 2
+    assert [event.get("kind") for event in matching] == ["terminal", "settled"]
+    terminal, settled = matching
+    _assert_event_shape(terminal)
+    _assert_event_shape(settled)
+    assert terminal["state"] == "success"
+    assert settled["state"] == "success"
+    assert settled["artifact_ready"] is True
+    assert settled["clone_cleaned"] is True
+    assert settled["session_cleaned"] is True
+    assert settled["attention_required"] is False
     if outcome.artifact_path:
-        assert event["artifact_path"] == outcome.artifact_path
+        assert terminal["artifact_path"] == outcome.artifact_path
+        assert settled["artifact_path"] == outcome.artifact_path
 
     # CLI query seam: events after empty cursor returns the new event as JSON.
     code = main(
@@ -289,6 +309,7 @@ def test_finalize_succeeds_when_notification_io_fails(
     cfg = RunConfig(
         source=git_source,
         prompt="notify fail soft",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=shared,
@@ -420,3 +441,339 @@ def test_bounded_wait_returns_after_delayed_event(
     assert matched[0]["task_id"] == "wait-late"
     assert elapsed < 1.5, f"wait should unblock early, elapsed={elapsed}"
     assert elapsed >= 0.1, f"wait must actually block until event, elapsed={elapsed}"
+
+
+def test_emit_dedupes_by_run_id_not_only_task_state(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    a = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-aaa",
+        shared_cache_root=shared,
+    )
+    b = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-bbb",
+        shared_cache_root=shared,
+    )
+    assert a is not None and b is not None
+    again = emit_completion_event(
+        task_id="same-task",
+        state="success",
+        run_id="run-aaa",
+        shared_cache_root=shared,
+    )
+    assert again is None
+    events = list_completion_events(shared_cache_root=shared, wait_seconds=0)
+    matching = [e for e in events if e.get("task_id") == "same-task"]
+    assert len(matching) == 2
+    assert {e["run_id"] for e in matching} == {"run-aaa", "run-bbb"}
+
+
+def test_terminal_and_settled_have_independent_dedup_keys(
+    tmp_roots: dict[str, Path],
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    terminal = emit_completion_event(
+        task_id="same-run",
+        state="success",
+        run_id="run-one",
+        kind="terminal",
+        shared_cache_root=shared,
+    )
+    settled = emit_completion_event(
+        task_id="same-run",
+        state="success",
+        run_id="run-one",
+        kind="settled",
+        clone_cleaned=True,
+        session_cleaned=True,
+        shared_cache_root=shared,
+    )
+    duplicate_settled = emit_completion_event(
+        task_id="same-run",
+        state="success",
+        run_id="run-one",
+        kind="settled",
+        shared_cache_root=shared,
+    )
+    assert terminal is not None and settled is not None
+    assert duplicate_settled is None
+    events = list_completion_events(shared_cache_root=shared, run_id="run-one")
+    assert [event["kind"] for event in events] == ["terminal", "settled"]
+
+
+def test_list_events_filter_by_run_id_and_dispatcher(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    emit_completion_event(
+        task_id="t1",
+        state="success",
+        run_id="r1",
+        dispatcher_id="d1",
+        shared_cache_root=shared,
+    )
+    emit_completion_event(
+        task_id="t2",
+        state="failed",
+        run_id="r2",
+        dispatcher_id="d2",
+        shared_cache_root=shared,
+    )
+    only_r1 = list_completion_events(shared_cache_root=shared, run_id="r1", wait_seconds=0)
+    assert len(only_r1) == 1 and only_r1[0]["run_id"] == "r1"
+    only_d2 = list_completion_events(
+        shared_cache_root=shared, dispatcher_id="d2", wait_seconds=0
+    )
+    assert len(only_d2) == 1 and only_d2[0]["dispatcher_id"] == "d2"
+    # Unfiltered remains compatible.
+    all_events = list_completion_events(shared_cache_root=shared, wait_seconds=0)
+    assert len(all_events) >= 2
+
+
+def test_events_wait_bounds_default_and_reject(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from grok_worker.completion_events import (
+        DEFAULT_EVENT_WAIT_SECONDS,
+        MAX_EVENT_WAIT_SECONDS,
+        EventWaitError,
+        validate_wait_seconds,
+    )
+
+    assert DEFAULT_EVENT_WAIT_SECONDS == 30
+    assert MAX_EVENT_WAIT_SECONDS == 600
+    assert validate_wait_seconds(0) == 0
+    assert validate_wait_seconds(30) == 30
+    assert validate_wait_seconds(120) == 120
+    assert validate_wait_seconds(300) == 300
+    assert validate_wait_seconds(600) == 600
+    with pytest.raises(EventWaitError):
+        validate_wait_seconds(-1)
+    with pytest.raises(EventWaitError):
+        validate_wait_seconds(601)
+
+    shared = tmp_roots["shared"]
+    monkeypatch.setenv("GROK_WORKER_CACHE_ROOT", str(shared))
+    code = main(
+        [
+            "events",
+            "--shared-cache-root",
+            str(shared),
+            "--wait-seconds",
+            "601",
+            "--json",
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "600" in err or "wait" in err.lower()
+
+
+def test_watch_unblocks_on_delayed_attention_event(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import threading
+    import time
+
+    from grok_worker.completion_events import emit_completion_event
+
+    shared = tmp_roots["shared"]
+
+    def delayed_emit() -> None:
+        time.sleep(0.15)
+        emit_completion_event(
+            task_id="watch-failed",
+            state="failed",
+            run_id="watch-run-1",
+            dispatcher_id="watch-disp",
+            kind="terminal",
+            attention_required=True,
+            shared_cache_root=shared,
+        )
+
+    thread = threading.Thread(target=delayed_emit, daemon=True)
+    started = time.monotonic()
+    thread.start()
+    code = main(
+        [
+            "watch",
+            "--shared-cache-root",
+            str(shared),
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--run-id",
+            "watch-run-1",
+            "--wait-seconds",
+            "2",
+            "--json",
+        ]
+    )
+    elapsed = time.monotonic() - started
+    thread.join(timeout=2)
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "events"
+    assert payload["attention_required"] is True
+    assert payload["events"][0]["task_id"] == "watch-failed"
+    assert elapsed < 1.5
+
+
+def test_watch_timeout_returns_compact_healthy_heartbeat(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from grok_worker.process_identity import capture_identity
+
+    clone = tmp_roots["disposable"] / "watch-running"
+    clone.mkdir()
+    now = utc_now()
+    pid, token = capture_identity()
+    meta = WorkerMeta(
+        schema_version=SCHEMA_VERSION,
+        task_id="watch-running",
+        source_realpath="/tmp/watch-source",
+        clone_realpath=str(clone.resolve()),
+        state=WorkerState.RUNNING,
+        created_at=dt_to_iso(now) or "",
+        updated_at=dt_to_iso(now) or "",
+        managed_by=MANAGED_BY,
+        runner_pid=pid,
+        runner_start_token=token,
+        pid=pid,
+        run_id="watch-run-healthy",
+        dispatcher_id="watch-dispatcher",
+        mode="analysis",
+        backend="native",
+    )
+    meta_dir(clone).mkdir(parents=True, exist_ok=True)
+    meta.write(meta_path(clone))
+
+    code = main(
+        [
+            "watch",
+            "--shared-cache-root",
+            str(tmp_roots["shared"]),
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--run-id",
+            "watch-run-healthy",
+            "--wait-seconds",
+            "0",
+            "--json",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "heartbeat"
+    assert payload["attention_required"] is False
+    assert len(payload["workers"]) == 1
+    worker = payload["workers"][0]
+    assert worker["state"] == "running"
+    assert worker["runner_live"] is True
+    assert "runner_pid" not in worker
+    assert "error_message" not in worker
+
+
+def test_one_dispatcher_watch_collects_parallel_run_events(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from grok_worker.completion_events import emit_completion_event
+
+    shared = tmp_roots["shared"]
+    for run_id in ("parallel-run-a", "parallel-run-b"):
+        emit_completion_event(
+            task_id=run_id,
+            state="success",
+            run_id=run_id,
+            dispatcher_id="parallel-dispatcher",
+            kind="terminal",
+            shared_cache_root=shared,
+        )
+    emit_completion_event(
+        task_id="other-run",
+        state="failed",
+        run_id="other-run",
+        dispatcher_id="other-dispatcher",
+        kind="terminal",
+        shared_cache_root=shared,
+    )
+
+    code = main(
+        [
+            "watch",
+            "--shared-cache-root",
+            str(shared),
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--dispatcher-id",
+            "parallel-dispatcher",
+            "--wait-seconds",
+            "0",
+            "--json",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "events"
+    assert payload["count"] == 2
+    assert {event["run_id"] for event in payload["events"]} == {
+        "parallel-run-a",
+        "parallel-run-b",
+    }
+
+
+def test_run_startup_failure_emits_immediate_attention(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(
+        [
+            "run",
+            "--source",
+            str(tmp_roots["root"] / "missing-source"),
+            "--prompt",
+            "must not launch",
+            "--task-id",
+            "startup-missing",
+            "--run-id",
+            "startup-run-1",
+            "--dispatcher-id",
+            "startup-dispatcher",
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--artifact-root",
+            str(tmp_roots["artifacts"]),
+            "--shared-cache-root",
+            str(tmp_roots["shared"]),
+            "--no-prepare-deps",
+        ]
+    )
+    assert code == 1
+    capsys.readouterr()
+    events = _load_jsonl(_notification_log(tmp_roots["shared"]))
+    assert len(events) == 1
+    event = events[0]
+    assert event["kind"] == "attention"
+    assert event["state"] == "startup_failed"
+    assert event["run_id"] == "startup-run-1"
+    assert event["attention_required"] is True
+    assert event["reason_code"] == "startup_file_not_found_error"

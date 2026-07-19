@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_HARD_TIMEOUT
 from grok_worker.paths import (
     default_artifact_root,
     default_disposable_root,
@@ -32,6 +33,7 @@ def _config(
     reasoning_effort: str | None,
     allow_subagents: bool,
     timeout: int,
+    hard_timeout: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     resolved_source = source.resolve()
@@ -64,6 +66,7 @@ def _config(
         reasoning_effort=reasoning_effort or default_reasoning_effort(),
         allow_subagents=allow_subagents,
         timeout=timeout,
+        hard_timeout=None if hard_timeout == 0 else hard_timeout,
         prepare_deps=not no_prepare_deps,
     )
 
@@ -103,6 +106,7 @@ def _options(
     reasoning_effort: str | None,
     allow_subagents: bool,
     timeout: int,
+    hard_timeout: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     return _config(
@@ -120,6 +124,7 @@ def _options(
         reasoning_effort,
         allow_subagents,
         timeout,
+        hard_timeout,
         no_prepare_deps,
     )
 
@@ -138,31 +143,45 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
         mcp_config: str | None = typer.Option(None, "--mcp-config"),
         model: str | None = typer.Option(None, "--model"),
         reasoning_effort: str | None = typer.Option(None, "--reasoning-effort"),
-        allow_subagents: bool = typer.Option(False, "--allow-subagents"),
-        timeout: int = typer.Option(1800, "--timeout"),
+        allow_subagents: bool = typer.Option(True, "--allow-subagents/--no-subagents"),
+        timeout: int = typer.Option(
+            DEFAULT_ACPX_TIMEOUT,
+            "--timeout",
+            help="Inactivity lease seconds; real activity renews it",
+        ),
+        hard_timeout: int = typer.Option(
+            DEFAULT_HARD_TIMEOUT,
+            "--hard-timeout",
+            help="Absolute safety cap seconds; 0 disables it",
+        ),
         no_prepare_deps: bool = typer.Option(False, "--no-prepare-deps"),
+        dispatcher_id: str | None = typer.Option(None, "--dispatcher-id"),
+        run_id: str | None = typer.Option(None, "--run-id"),
     ) -> None:
         """Operate one immutable logical-task named session."""
-        _run(
-            action,
-            _options(
-                source,
-                manifest_file,
-                role,
-                mode,
-                disposable_root,
-                artifact_root,
-                shared_cache_root,
-                acpx_bin,
-                agent_bin,
-                mcp_config,
-                model,
-                reasoning_effort,
-                allow_subagents,
-                timeout,
-                no_prepare_deps,
-            ),
+        import os
+
+        cfg = _options(
+            source,
+            manifest_file,
+            role,
+            mode,
+            disposable_root,
+            artifact_root,
+            shared_cache_root,
+            acpx_bin,
+            agent_bin,
+            mcp_config,
+            model,
+            reasoning_effort,
+            allow_subagents,
+            timeout,
+            hard_timeout,
+            no_prepare_deps,
         )
+        cfg.dispatcher_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
+        cfg.run_id = run_id
+        _run(action, cfg)
 
     command.__name__ = f"cmd_session_{action}"
     return command

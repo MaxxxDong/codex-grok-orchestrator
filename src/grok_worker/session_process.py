@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from grok_worker.activity_lease import initialize_lease, run_with_activity_lease
 from grok_worker.cache_policy import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_TTL_HOURS,
     cache_use_lease,
 )
-from grok_worker.constants import DEFAULT_CAP_BYTES
-from grok_worker.deps import prepare_shared_env
+from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_CAP_BYTES, DEFAULT_HARD_TIMEOUT
+from grok_worker.deps import DepsError, prepare_shared_env
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
@@ -41,12 +41,15 @@ class SessionConfig:
     mcp_config: str | None = None
     model: str = ""
     reasoning_effort: str = ""
-    allow_subagents: bool = False
-    timeout: int = 1800
+    allow_subagents: bool = True
+    timeout: int = DEFAULT_ACPX_TIMEOUT
+    hard_timeout: int | None = DEFAULT_HARD_TIMEOUT
     prepare_deps: bool = True
     cap_bytes: int = DEFAULT_CAP_BYTES
     cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES
     cache_ttl_hours: float = DEFAULT_CACHE_TTL_HOURS
+    dispatcher_id: str | None = None
+    run_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.model:
@@ -91,8 +94,6 @@ def common_command(cfg: SessionConfig, clone: Path) -> list[str]:
         [
             "--model",
             cfg.model,
-            "--timeout",
-            str(cfg.timeout),
             "--format",
             "json",
             "--suppress-reads",
@@ -107,13 +108,25 @@ def common_command(cfg: SessionConfig, clone: Path) -> list[str]:
     return command
 
 
-def invoke(command: list[str], log: Path, env: dict[str, str]) -> int:
-    log.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(command, capture_output=True, env=env, check=False)
-    with log.open("ab") as stream:
-        stream.write(result.stdout)
-        stream.write(result.stderr)
-    return int(result.returncode)
+def invoke(
+    command: list[str],
+    log: Path,
+    env: dict[str, str],
+    *,
+    clone: Path,
+    timeout: int,
+    hard_timeout: int | None,
+    initialize: bool = True,
+) -> int:
+    return run_with_activity_lease(
+        command,
+        clone=clone,
+        log=log,
+        env=env,
+        idle_timeout_seconds=timeout,
+        hard_timeout_seconds=hard_timeout,
+        initialize=initialize,
+    ).exit_code
 
 
 def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure: bool) -> int:
@@ -135,16 +148,42 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
     with worker_lock(meta_dir(clone)), lease:
         dep_env: dict[str, str] = {}
         if cfg.prepare_deps:
-            dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
+            try:
+                dep_env = prepare_shared_env(clone, cfg.shared_cache_root)
+            except DepsError as exc:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"[grok-worker] warning: dependency prewarm skipped: {exc}\n")
         env.update(dep_env)
         common = common_command(cfg, clone)
+        initialize_lease(
+            clone,
+            idle_timeout_seconds=cfg.timeout,
+            hard_timeout_seconds=cfg.hard_timeout,
+        )
         if ensure:
-            ensure_exit = invoke(build_ensure_cmd(common, state.session_name), log, env)
+            ensure_exit = invoke(
+                build_ensure_cmd(common, state.session_name),
+                log,
+                env,
+                clone=clone,
+                timeout=cfg.timeout,
+                hard_timeout=cfg.hard_timeout,
+                initialize=False,
+            )
             if ensure_exit != 0:
                 state.status = "session_error"
                 state.write(session_state_path(cfg.disposable_root, state.task_id))
                 return ensure_exit
-        exit_code = invoke(build_prompt_cmd(common, state.session_name, prompt_file), log, env)
+        exit_code = invoke(
+            build_prompt_cmd(common, state.session_name, prompt_file),
+            log,
+            env,
+            clone=clone,
+            timeout=cfg.timeout,
+            hard_timeout=cfg.hard_timeout,
+            initialize=False,
+        )
     state.session_created = True
     state.prompt_count += 1
     state.status = "session_open" if exit_code == 0 else "session_error"

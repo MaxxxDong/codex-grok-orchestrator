@@ -8,6 +8,14 @@
 6. Scan the tracked tree and Git history for credentials, private endpoints, personal paths, runtime state, and generated worker artifacts.
 7. Run a read-only Grok release audit and review every finding; do not let the worker publish its own release.
 8. Confirm README links, license metadata, security reporting, and supported-platform claims.
-9. Tag the verified commit. Create and publish the GitHub release only from that exact commit.
+9. Regression-check: safe dirt auto-snapshots; ignored `.env`, sensitive content,
+   and escaping symlinks remain blocked/excluded; native High downgrade fails;
+   repository `.mcp.json` is restored; retained task IDs allocate new clones;
+   OS flock slot leases, event wait 0/30/120 bounds, prompt-only source rules,
+   adaptive leases, and diagnostic-only health remain correct.
+10. Run one native live smoke and, when ACP compatibility is shipped, one ACP
+    smoke. Verify exact artifacts and inspect locally observable token/reasoning
+    metrics without inferring provider cache hits.
+11. Tag the verified commit. Create and publish the GitHub release only from that exact commit.
 
 Release automation must never mutate a live provider config or publish when verification is incomplete.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest import mock
 
 from grok_worker.artifacts import sha256_file, verify_artifact_contract
 from grok_worker.runner import RunConfig, run_worker
@@ -17,6 +18,7 @@ def test_success_collects_artifacts_and_deletes_clone(
     cfg = RunConfig(
         source=git_source,
         prompt="do the thing",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -57,6 +59,7 @@ def test_success_manifest_hash_verification(
     cfg = RunConfig(
         source=git_source,
         prompt="x",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -67,3 +70,30 @@ def test_success_manifest_hash_verification(
     outcome = run_worker(cfg)
     art = Path(outcome.artifact_path or "")
     verify_artifact_contract(art)
+
+
+def test_post_gc_failure_does_not_override_success(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    path_with_fake_acpx: Path,
+    capsys: object,
+) -> None:
+    cfg = RunConfig(
+        source=git_source,
+        prompt="x",
+        backend="acp",
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        acpx_bin=str(path_with_fake_acpx),
+        prepare_deps=False,
+        task_id="post-gc-warning",
+    )
+    with mock.patch(
+        "grok_worker.worker_exec.gc_disposable_root", side_effect=OSError("gc lock denied")
+    ):
+        outcome = run_worker(cfg)
+
+    assert outcome.exit_code == 0
+    assert outcome.state == "success"
+    assert "post-run GC skipped" in capsys.readouterr().err  # type: ignore[attr-defined]

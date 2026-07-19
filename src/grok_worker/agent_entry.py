@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from grok_worker.run_config import check_grok_environment
 from grok_worker.settings import default_model, default_reasoning_effort, env_flag, env_text
 
 
@@ -21,12 +22,13 @@ def build_command() -> list[str]:
         grok_bin,
         "--sandbox",
         env_text("GROK_WORKER_SANDBOX", "workspace"),
+        "--always-approve",
         "--model",
         default_model(),
         "--reasoning-effort",
         default_reasoning_effort(),
     ]
-    if not env_flag("GROK_WORKER_ALLOW_SUBAGENTS", default=False):
+    if not env_flag("GROK_WORKER_ALLOW_SUBAGENTS", default=True):
         command.append("--no-subagents")
     leader_socket = os.environ.get("GROK_WORKER_LEADER_SOCKET") or str(
         Path(tempfile.gettempdir()) / f"grok-worker-{os.getpid()}.sock"
@@ -49,7 +51,12 @@ def main() -> int:
     try:
         command = build_command()
         socket_path = Path(command[command.index("--leader-socket") + 1])
-        completed = subprocess.run(command, check=False)
+        warning = check_grok_environment(
+            command[0], cwd=Path.cwd(), environ=os.environ.copy()
+        )
+        if warning:
+            print(f"grok-worker-agent: warning: {warning}", file=sys.stderr)
+        completed = subprocess.run(command, env=os.environ.copy(), check=False)
     except (OSError, ValueError) as exc:
         print(f"grok-worker-agent: {exc}", file=sys.stderr)
         return 127

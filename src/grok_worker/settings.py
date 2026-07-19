@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 DEFAULT_MODEL = "grok-4.5"
@@ -22,6 +23,16 @@ def default_model() -> str:
 
 def default_reasoning_effort() -> str:
     return env_text("GROK_WORKER_REASONING_EFFORT", DEFAULT_REASONING_EFFORT)
+
+
+def grok_home(environ: Mapping[str, str] = os.environ) -> Path:
+    """Return the native Grok home used by the actual child process."""
+    explicit = environ.get("GROK_HOME", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    home = environ.get("HOME", "").strip()
+    base = Path(home).expanduser() if home else Path.home()
+    return (base / ".grok").resolve()
 
 
 def default_mcp_config() -> str | None:

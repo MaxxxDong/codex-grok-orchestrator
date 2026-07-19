@@ -2,6 +2,40 @@
 
 Make only the focused change in the manifest (or one-shot task), verify it, and leave an inspectable diff. Do not push, release, or mutate canonical governance documents unless explicitly allowed.
 
+## Early atomic lifecycle checkpoint
+
+Before extensive reading or editing, create both advisory files below. Write each
+through a same-directory temporary file and atomic rename/replace; never expose a
+truncated JSON file.
+
+1. Write `.grok-worker/progress.json` with exactly this safe shape:
+
+```json
+{"schema_version": 1, "step": "planning", "updated_at": "<ISO-8601 UTC>"}
+```
+
+`step` may only be `planning`, `editing`, `verifying`, or `finalizing`. Update it
+atomically when entering each phase and at least once every five minutes during
+long work. Do not add free-form messages, paths, prompts, secrets, or file content.
+Never modify any other file under `.grok-worker/`.
+
+2. Write an initial `.grok-output/result.json` checkpoint:
+
+```json
+{
+  "schema_version": 1,
+  "task_completed": false,
+  "status": "partial",
+  "summary": "Work in progress; this is not a completion claim.",
+  "findings": [],
+  "verification": []
+}
+```
+
+After verification, set progress to `finalizing`, then atomically replace this
+checkpoint with the completed result contract below. A partial checkpoint never
+counts as success, but it preserves truthful lifecycle evidence on interruption.
+
 ## Mandatory implementation output contract
 
 You must write structured lifecycle evidence on disk before claiming success. Callers do not inject this JSON boilerplate; this role owns the exact contract.

@@ -18,3 +18,7 @@ Until a public remote with private reporting is configured, keep the report priv
 - Workers may edit only their isolated clone in implementation mode.
 - Successful clone deletion requires verified external artifacts.
 - Native Windows locking is not supported; use WSL rather than weakening lock semantics.
+- The `[claude_compat] imported = true` discovery guard in derived profiles does
+  not replace enforcement: `grok inspect --json` still fail-closes on any
+  Grok-level plugin or MCP server. See the managed-profile section in
+  [README.md](README.md).

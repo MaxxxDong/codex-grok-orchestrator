@@ -157,6 +157,7 @@ def collect_artifacts(
         "task_manifest": values["task_manifest"],
         "lifecycle": meta.to_dict(),
         "session": values["session"],
+        "activity_lease": values.get("activity_lease", {"available": False}),
         "agent_output": _agent_output(clone, agent_log),
     }
     receipt_payload: dict[str, object] = {

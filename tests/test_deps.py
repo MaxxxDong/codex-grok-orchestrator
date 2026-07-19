@@ -161,8 +161,12 @@ def test_frozen_failure_no_retry(tmp_path: Path) -> None:
                 prepare_shared_env(source, shared)
 
 
-def test_deps_hard_failure_prevents_acpx(
-    git_source: Path, tmp_roots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", [DepsError("sync failed hard"), OSError("cache denied")])
+def test_deps_prewarm_failure_warns_and_still_invokes_backend(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
 ) -> None:
     import subprocess
 
@@ -176,13 +180,14 @@ def test_deps_hard_failure_prevents_acpx(
     never.chmod(0o755)
 
     def boom(*a, **k):  # type: ignore[no-untyped-def]
-        raise DepsError("sync failed hard")
+        raise failure
 
     with mock.patch("grok_worker.worker_exec.prepare_shared_env", side_effect=boom):
         outcome = run_worker(
             RunConfig(
                 source=git_source,
                 prompt="x",
+                backend="acp",
                 disposable_root=tmp_roots["disposable"],
                 artifact_root=tmp_roots["artifacts"],
                 shared_cache_root=tmp_roots["shared"],
@@ -192,9 +197,14 @@ def test_deps_hard_failure_prevents_acpx(
                 skip_post_gc=True,
             )
         )
-    assert not invoked_marker.exists()
+    assert invoked_marker.exists()
     assert outcome.state == "failed"
-    assert "deps prepare failed" in (outcome.message or "")
+    assert "deps prepare failed" not in (outcome.message or "")
+    assert outcome.artifact_path is not None
+    worker_log = Path(outcome.artifact_path, "worker.log").read_text(
+        encoding="utf-8"
+    )
+    assert "dependency prewarm skipped" in worker_log
 
 
 def test_no_local_env_detection(tmp_path: Path) -> None:
@@ -211,6 +221,17 @@ def test_worker_env_exports_require_no_sync() -> None:
         {"UV_CACHE_DIR": "/c", "UV_PROJECT_ENVIRONMENT": "/e", "PYTHONPATH": "/p"}
     )
     assert "uv run --no-sync" in text
+    assert "already configured in the process environment" in text
+    assert "/c" not in text
+    assert "/e" not in text
+    assert "/p" not in text
+    assert text == worker_env_exports(
+        {
+            "UV_CACHE_DIR": "/different-clone/cache",
+            "UV_PROJECT_ENVIRONMENT": "/different-shared-env",
+            "PYTHONPATH": "/different-clone",
+        }
+    )
 
 
 def test_concurrent_preparation_serialized(tmp_path: Path) -> None:

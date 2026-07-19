@@ -73,6 +73,7 @@ def test_cap_refuse_when_over_after_gc(
     cfg = RunConfig(
         source=git_source,
         prompt="no room",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -111,6 +112,7 @@ def test_cap_allows_after_expired_cleanup(
     cfg = RunConfig(
         source=git_source,
         prompt="after cleanup",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
@@ -159,6 +161,7 @@ def test_exact_boundary_cap(
     cfg = RunConfig(
         source=git_source,
         prompt="boundary",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],

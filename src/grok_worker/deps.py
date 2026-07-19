@@ -185,21 +185,24 @@ def prepare_shared_env(
 
 
 def worker_env_exports(env_vars: dict[str, str]) -> str:
-    """Prompt contract requiring uv run --no-sync."""
+    """Return a stable prompt contract for the preconfigured dependency env."""
+    configured = any(
+        key in env_vars
+        for key in (
+            "UV_CACHE_DIR",
+            "UV_PROJECT_ENVIRONMENT",
+            "PYTHONPATH",
+            "GROK_WORKER_DEPS_FINGERPRINT",
+        )
+    )
     lines = [
         "# Shared dependency contract (MANDATORY):",
         "#   Always use: uv run --no-sync <command>",
         "#   Never: uv sync / pip install inside the clone",
         "#   Never create clone-local .venv",
     ]
-    for key in (
-        "UV_CACHE_DIR",
-        "UV_PROJECT_ENVIRONMENT",
-        "PYTHONPATH",
-        "GROK_WORKER_DEPS_FINGERPRINT",
-    ):
-        if key in env_vars:
-            lines.append(f"export {key}={env_vars[key]!r}")
+    if configured:
+        lines.append("#   Dependency paths are already configured in the process environment")
     return "\n".join(lines) + "\n"
 
 

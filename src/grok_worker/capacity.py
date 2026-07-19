@@ -69,6 +69,8 @@ def enforce_cap(disposable_root: Path, cap_bytes: int = DEFAULT_CAP_BYTES) -> in
     return usage
 
 
+# Root-scoped active budget counts only real invocations in flight.
+# Idle named sessions (SESSION_OPEN) must not permanently reserve capacity.
 ACTIVE_STATES = frozenset(
     {
         WorkerState.CREATING,
@@ -79,7 +81,11 @@ ACTIVE_STATES = frozenset(
 
 
 def count_active_workers(disposable_root: Path) -> int:
-    """Count managed clones in creating/running/finalizing states."""
+    """Count managed clones in creating/running/finalizing states.
+
+    ``session_open`` is intentionally excluded: max concurrent workers means
+    active Grok invocations/processes, not idle open session objects.
+    """
     root = disposable_root
     if not root.is_dir():
         return 0

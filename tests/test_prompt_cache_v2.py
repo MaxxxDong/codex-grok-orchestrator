@@ -80,3 +80,54 @@ def test_token_metrics_support_camel_snake_and_unobservable() -> None:
     )
     parsed = extract_token_metrics_from_text(lines)
     assert parsed.observable and parsed.cache_ratio == 0.75
+
+    wrapped = json.dumps(
+        {
+            "agent_output": (
+                "warning before JSON\n"
+                + json.dumps(
+                    {
+                        "usage": {
+                            "input_tokens": 400,
+                            "cache_read_input_tokens": 300,
+                            "output_tokens": 20,
+                            "reasoning_tokens": 11,
+                        }
+                    }
+                )
+                + "\n"
+            )
+        }
+    )
+    native = extract_token_metrics_from_text(wrapped)
+    assert native.input_tokens == 400
+    assert native.cached_tokens == 300
+    assert native.output_tokens == 20
+    assert native.reasoning_tokens == 11
+    pretty_native = extract_token_metrics_from_text(json.dumps(json.loads(wrapped), indent=2))
+    assert pretty_native == native
+
+    warning_prefixed = (
+        "\x1b[33m WARN\x1b[0m model refresh failed\n"
+        + json.dumps(
+            {
+                "text": "done",
+                "usage": {
+                    "input_tokens": 74231,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 1490,
+                    "reasoning_tokens": 221,
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    real_native = extract_token_metrics_from_text(
+        json.dumps({"agent_output": warning_prefixed, "lifecycle": {}}, indent=2)
+    )
+    assert real_native.input_tokens == 74231
+    assert real_native.cached_tokens == 0
+    assert real_native.output_tokens == 1490
+    assert real_native.reasoning_tokens == 221
+    assert real_native.observable

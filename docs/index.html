@@ -871,7 +871,7 @@
           安装包后执行一次有界分析任务。实现模式使用相同形态。
         </p>
 
-        <pre data-lang-block="en"><code>uv tool install .
+        <pre data-lang-block="en"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.3"
 
 grok-worker status --source /path/to/repository --json
 
@@ -880,7 +880,7 @@ grok-worker run \
   --mode analysis \
   --task-id public-release-audit \
   --prompt "Audit packaging and release readiness. Do not edit files."</code></pre>
-        <pre data-lang-block="zh"><code>uv tool install .
+        <pre data-lang-block="zh"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.5.3"
 
 grok-worker status --source /path/to/repository --json
 
@@ -917,13 +917,13 @@ grok-worker run \
           <p data-lang-block="zh"><strong>Worker 只交付证据，不合并、不推送、不发布、不提交外部事务、不自行批准自己的工作。</strong></p>
           <ul data-lang-block="en">
             <li>No provider credentials, OAuth state, or relay endpoints in the public core.</li>
-            <li>Subagents are disabled by default; enable only deliberately.</li>
+            <li>Workers allow at most 3 non-overlapping subagents; disable them explicitly when unnecessary.</li>
             <li>Deletion protects the source, home, artifacts, shared cache, and disposable root.</li>
             <li>Private overlays own competition gates, org approval chains, and personal paths.</li>
           </ul>
           <ul data-lang-block="zh">
             <li>公共核心不包含服务商凭据、OAuth 状态或中转地址。</li>
-            <li>默认关闭嵌套子代理；仅在有意时开启。</li>
+            <li>Worker 最多允许 3 个不重叠子代理；不需要时应显式关闭。</li>
             <li>删除保护源仓库、家目录、制品目录、共享缓存与 disposable 根目录。</li>
             <li>比赛 Gate、组织审批链与个人路径属于私有叠加层。</li>
           </ul>
@@ -976,6 +976,7 @@ grok-worker run \
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md">README (bilingual)</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/design-principles.md">Design principles</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/operations.md">Operations</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/windows-upgrade.md">Windows / WSL upgrade</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SKILL.md">Skill integration</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/releases/release-notes.md">Release notes</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SECURITY.md">Security policy</a></li>
@@ -984,6 +985,7 @@ grok-worker run \
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/README.md#中文">README（双语）</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/design-principles.md">设计原则</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/operations.md">运维文档</a></li>
+          <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/windows-upgrade.md">Windows / WSL 升级</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SKILL.md">Skill 接入</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/releases/release-notes.md">发布说明</a></li>
           <li><a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/SECURITY.md">安全策略</a></li>

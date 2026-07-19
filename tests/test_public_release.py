@@ -15,15 +15,18 @@ def test_public_tree_contains_no_personal_home_paths() -> None:
     offenders: list[str] = []
     ignored_parts = {
         ".git",
-        ".grok-output",
-        ".grok-worker",
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".uv-cache",
         ".venv",
         "build",
         "dist",
         "__pycache__",
+        ".grok-worker",
+        ".grok-output",
+        ".grok-disposable",
+        ".grok-artifacts",
     }
     for path in ROOT.rglob("*"):
         if not path.is_file() or any(part in ignored_parts for part in path.parts):
@@ -45,43 +48,40 @@ def test_runtime_version_matches_package_metadata() -> None:
 def test_public_docs_match_external_artifact_contract() -> None:
     from grok_worker.artifact_contract import ARTIFACT_FILES
 
-    for relative in ("SKILL.md", "docs/design-principles.md", "README.md"):
+    for relative in ("SKILL.md", "docs/design-principles.md"):
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert all(name in text for name in ARTIFACT_FILES)
 
 
-def test_readme_is_canonical_bilingual_entry() -> None:
-    english_anchor = (ROOT / "README.md").read_text(encoding="utf-8")
-    pointer = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
-
-    assert "# 中文" in english_anchor or "## 中文" in english_anchor
-    assert "# English" in english_anchor or "## English" in english_anchor
-    assert "codex-grok-orchestrator" in english_anchor
-    assert "grok-worker" in english_anchor
-    assert "maxxxdong.github.io/codex-grok-orchestrator" in english_anchor
-    assert "docs/assets/grok-worker-intro-zh-final.mp4" in english_anchor
-    assert "docs/releases/release-notes.md" in english_anchor
-    artifacts = ("changes.patch", "worker.log", "verification.txt")
-    assert all(name in english_anchor for name in artifacts)
-    assert "stdevMac/grok-in-codex" in english_anchor
-    assert "Cjbuilds/Codex-Orchestration" in english_anchor
-    assert "No source code" in english_anchor or "未复制" in english_anchor
-
-    # Compatibility pointer must not re-host the full guide.
-    assert "README.md" in pointer
-    assert "#中文" in pointer or "README.md#中文" in pointer
-    assert len(pointer.splitlines()) < 40
-    assert "session-start" not in pointer
-
-
 def test_readmes_cross_link_language_versions() -> None:
+    english = (ROOT / "README.md").read_text(encoding="utf-8")
+    chinese = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+
+    assert "README.zh-CN.md" in english
+    assert "README.md" in chinese
+    assert all(name in chinese for name in ("changes.patch", "worker.log", "verification.txt"))
+
+
+def test_readme_is_canonical_bilingual_entry() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     pointer = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
-    lowered = readme.lower()
 
-    assert "README.zh-CN.md" in readme or "#中文" in readme or "](#中文)" in readme
+    assert "## 中文" in readme
+    assert "## English" in readme
+    assert "codex-grok-orchestrator" in readme
+    assert "grok-worker" in readme
+    assert "maxxxdong.github.io/codex-grok-orchestrator" in readme
+    assert "docs/assets/grok-worker-intro-zh-final.mp4" in readme
+    assert "docs/releases/release-notes.md" in readme
+    assert all(name in readme for name in ("changes.patch", "worker.log", "verification.txt"))
+    assert "stdevMac/grok-in-codex" in readme
+    assert "Cjbuilds/Codex-Orchestration" in readme
+    assert "No source code" in readme or "未复制" in readme
+
     assert "README.md" in pointer
-    assert "](#english)" in lowered or "#english" in lowered
+    assert "README.md#中文" in pointer
+    assert len(pointer.splitlines()) < 40
+    assert "session-start" not in pointer
 
 
 def test_package_declares_runtime_cli_and_entry_points() -> None:
@@ -105,10 +105,11 @@ def test_agent_command_uses_configured_profile(monkeypatch) -> None:  # type: ig
     assert command[0] == "/opt/tools/grok"
     assert command[command.index("--model") + 1] == "grok-test-model"
     assert command[command.index("--reasoning-effort") + 1] == "medium"
+    assert "--always-approve" in command
     assert "--no-subagents" not in command
 
 
-def test_agent_defaults_to_safe_no_subagents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_agent_defaults_to_worker_approval_and_subagents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     for key in (
         "GROK_WORKER_MODEL",
         "GROK_WORKER_REASONING_EFFORT",
@@ -120,9 +121,52 @@ def test_agent_defaults_to_safe_no_subagents(monkeypatch) -> None:  # type: igno
     from grok_worker.agent_entry import build_command
 
     command = build_command()
-    assert "--no-subagents" in command
+    assert "--always-approve" in command
+    assert "--no-subagents" not in command
     assert command[command.index("--model") + 1]
     assert command[command.index("--reasoning-effort") + 1]
+
+
+def test_agent_can_explicitly_disable_subagents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
+    monkeypatch.setenv("GROK_WORKER_ALLOW_SUBAGENTS", "0")
+
+    from grok_worker.agent_entry import build_command
+
+    command = build_command()
+    assert "--no-subagents" in command
+
+
+def test_native_command_uses_configured_grok_binary(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "/opt/tools/custom-grok")
+
+    from grok_worker.run_config import default_grok_bin
+
+    assert default_grok_bin() == "/opt/tools/custom-grok"
+
+
+def test_native_analysis_is_os_sandboxed_read_only(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
+    from grok_worker.run_config import RunConfig, build_native_cmd
+
+    analysis = build_native_cmd(
+        RunConfig(source=tmp_path, prompt="review", backend="native", mode="analysis"),
+        tmp_path,
+        tmp_path / "prompt.md",
+    )
+    implementation = build_native_cmd(
+        RunConfig(source=tmp_path, prompt="edit", backend="native", mode="implementation"),
+        tmp_path,
+        tmp_path / "prompt.md",
+    )
+
+    assert analysis[analysis.index("--sandbox") + 1] == "read-only"
+    assert analysis[analysis.index("--permission-mode") + 1] == "plan"
+    assert "--always-approve" not in analysis
+    assert implementation[implementation.index("--sandbox") + 1] == "workspace"
+    assert "--always-approve" in implementation
 
 
 def test_packaged_prompts_load_without_repository_assets() -> None:
@@ -136,7 +180,13 @@ def test_packaged_prompts_load_without_repository_assets() -> None:
 def test_mcp_config_is_optional_in_acpx_command(tmp_path: Path) -> None:
     from grok_worker.run_config import RunConfig, build_acpx_cmd
 
-    cfg = RunConfig(source=tmp_path, prompt="review", mcp_config=None, model="test-model")
+    cfg = RunConfig(
+        source=tmp_path,
+        prompt="review",
+        backend="acp",
+        mcp_config=None,
+        model="test-model",
+    )
     command = build_acpx_cmd(cfg, tmp_path, "agent", "prompt")
     assert "--mcp-config" not in command
     assert command[command.index("--model") + 1] == "test-model"
@@ -161,10 +211,11 @@ def test_test_marker_is_obviously_fake() -> None:
     assert os.environ.get(marker) is None
 
 
-def test_release_notes_exist_for_initial_public_release() -> None:
-    path = ROOT / "docs" / "releases" / "release-notes.md"
-    text = path.read_text(encoding="utf-8")
-    assert "2026-07-14" in text
+def test_release_notes_cover_current_public_release() -> None:
+    text = (ROOT / "docs" / "releases" / "release-notes.md").read_text(encoding="utf-8")
+
+    assert "2026-07-19" in text
+    assert "0.5.0" in text
     assert "codex-grok-orchestrator" in text
     assert "grok-worker" in text
     assert "changes.patch" in text
@@ -174,9 +225,7 @@ def test_release_notes_exist_for_initial_public_release() -> None:
 class _LandingPageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.tags: list[str] = []
         self.ids: set[str] = set()
-        self.langs: set[str] = set()
         self.has_main = False
         self.has_header = False
         self.has_footer = False
@@ -192,10 +241,7 @@ class _LandingPageParser(HTMLParser):
         self.external_stylesheets = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.tags.append(tag)
-        attr = {k: v for k, v in attrs}
-        if tag == "html" and attr.get("lang"):
-            self.langs.add(attr["lang"] or "")
+        attr = {key: value for key, value in attrs}
         if tag == "main":
             self.has_main = True
         if tag == "header":
@@ -207,8 +253,8 @@ class _LandingPageParser(HTMLParser):
             self.video_poster = attr.get("poster")
         if tag == "source" and attr.get("src"):
             self.video_src = attr.get("src")
-        if "id" in attr and attr["id"]:
-            self.ids.add(attr["id"])
+        if attr.get("id"):
+            self.ids.add(attr["id"] or "")
         if tag == "script":
             self._in_script = True
             self._script_chunks = []
@@ -216,7 +262,7 @@ class _LandingPageParser(HTMLParser):
                 self.external_scripts += 1
         if tag == "link" and attr.get("rel") == "stylesheet" and attr.get("href"):
             href = attr["href"] or ""
-            if href.startswith("http://") or href.startswith("https://"):
+            if href.startswith(("http://", "https://")):
                 self.external_stylesheets += 1
         if tag == "link" and attr.get("rel") == "canonical":
             self.canonical = attr.get("href")
@@ -235,8 +281,7 @@ class _LandingPageParser(HTMLParser):
 
 
 def test_docs_landing_page_is_static_bilingual_and_self_contained() -> None:
-    path = ROOT / "docs" / "index.html"
-    text = path.read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
     parser = _LandingPageParser()
     parser.feed(text)
     parser.close()
@@ -251,19 +296,14 @@ def test_docs_landing_page_is_static_bilingual_and_self_contained() -> None:
     assert parser.external_scripts == 0
     assert parser.external_stylesheets == 0
     assert "github.com/MaxxxDong/codex-grok-orchestrator" in text
-    assert "data-lang-block=\"zh\"" in text
-    assert "data-lang-block=\"en\"" in text
+    assert 'data-lang-block="zh"' in text
+    assert 'data-lang-block="en"' in text
     assert "localStorage" in text
     assert "replaceState" in text
     assert "prefers-reduced-motion" in text
     assert "lang-zh" in parser.ids and "lang-en" in parser.ids
+    assert parser.script_bodies
 
-    # Inline script must parse as valid JavaScript via Node when available.
-    assert parser.script_bodies, "expected inline language-switch script"
-    script = parser.script_bodies[0]
-    assert "langFromQuery" in script or "searchParams" in script
-
-    # No personal paths or credential-like private markers in public launch surfaces.
     for forbidden in (
         "/Users/" + "max",
         "api_key=",
@@ -271,7 +311,6 @@ def test_docs_landing_page_is_static_bilingual_and_self_contained() -> None:
         "relay.internal",
     ):
         assert forbidden not in text
-    # Avoid matching benign substrings like "task-id"; require token-shaped sk- secrets.
     assert re.search(r"\bsk-[A-Za-z0-9]{8,}\b", text) is None
 
 

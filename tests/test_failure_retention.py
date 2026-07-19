@@ -29,6 +29,7 @@ def _run(
     cfg = RunConfig(
         source=git_source,
         prompt="x",
+        backend="acp",
         disposable_root=tmp_roots["disposable"],
         artifact_root=tmp_roots["artifacts"],
         shared_cache_root=tmp_roots["shared"],
