@@ -341,3 +341,10 @@ def execute_worker(
                 attention_required=True,
                 reason_code="unhandled_worker_exception",
             )
+        if not cfg.skip_post_gc:
+            try:
+                gc_disposable_root(
+                    disposable, protected=protected, shared_cache_root=shared
+                )
+            except (OSError, ValueError) as exc:
+                print(f"[grok-worker] warning: post-run GC skipped: {exc}", file=sys.stderr)
