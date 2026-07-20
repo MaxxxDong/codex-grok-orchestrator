@@ -30,7 +30,7 @@ the only active runtime chain.
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
 - `--backend acp` and named sessions remain available and still require `acpx`.
-- Windows terminal and file tools are verified with Grok Build 0.2.103. The
+- Windows terminal and file tools are verified with Grok Build 0.2.106. The
   managed acpx runtime remains the only ACP compatibility path; there is no
   global-acpx or WSL fallback.
 - Workers use the native Grok home, so configured plugins, MCP servers, OAuth,

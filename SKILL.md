@@ -8,8 +8,9 @@ description: Use when Codex should delegate bounded repository analysis, impleme
 Codex is always the dispatcher, reviewer, and decision owner. This skill is a foreground worker mechanism, not a daemon, scheduler, autonomous product, or replacement for user approval gates.
 
 Use only the lifecycle entry point `bin/grok-worker`. One-shot `run` defaults to
-the managed ACP path on Windows and native Grok Build headless elsewhere. Do not invoke raw `grok`, `acpx`, or
-`grok-acp-worker` for repository work outside lifecycle diagnosis.
+native Grok Build headless on every platform. Managed ACP remains available only
+for explicit compatibility runs and named sessions. Do not invoke raw `grok`,
+`acpx`, or `grok-acp-worker` for repository work outside lifecycle diagnosis.
 
 For Codex-dispatched one-shot work, `run --detach` is the default launch path.
 It returns a receipt immediately; observe the `run_id` with `watch`, not an open
@@ -87,7 +88,7 @@ Worker failure.
 Use `run` for one bounded turn.
 
 `run` defaults to `--backend native` on every platform. Windows terminal and
-file tools are verified with Grok Build 0.2.103. Managed `--backend acp` remains
+file tools are verified with Grok Build 0.2.106. Managed `--backend acp` remains
 available for compatibility and continues to power named sessions.
 
 Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous iteration.

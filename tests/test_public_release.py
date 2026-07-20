@@ -313,6 +313,13 @@ def test_skill_uses_detached_event_first_default_for_codex() -> None:
     assert "one dispatcher-scoped watch" in text.lower()
 
 
+def test_skill_has_one_native_one_shot_default_on_windows() -> None:
+    text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "native Grok Build headless on every platform" in text
+    assert "defaults to `--backend native` on every platform" in text
+    assert "managed ACP path on Windows" not in text
+
+
 def test_source_checkout_launcher_has_no_host_fallback() -> None:
     text = (ROOT / "bin" / "grok-worker").read_text(encoding="utf-8")
     assert "/Users/" not in text
