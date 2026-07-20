@@ -4,6 +4,39 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-20
+
+### Fixed
+
+- `cache-status --json` and `cache-gc --json` are accepted as compatibility flags;
+  output remains a single JSON document.
+- Invalid CLI options print Click's concise usage error and exit code instead of
+  an uncaught Python/Rich traceback under `standalone_mode=False`.
+- Worker-owned `.grok-output/` runtime evidence is excluded from source-release
+  build contexts, so verification caches and symlinks cannot contaminate sdists.
+- Cache ratio is bounded to `[0, 1]` with an explicit basis field; incoherent
+  total/cached fields remain unobservable instead of being clamped. Grok separate
+  `cache_read_input_tokens` / `cacheReadInputTokens` uses `cached/(fresh+cached)`;
+  OpenAI nested `input_tokens_details.cached_tokens` uses `cached/total`; legacy
+  top-level `cached_tokens` keeps `cached/input`.
+
+### Added
+
+- Optional `model_calls` on token metrics from native Grok `num_turns` /
+  `modelCalls` without double-counting nested duplicates.
+- One-shot metrics record `process_duration_seconds` from a monotonic clock.
+- Stable base prompt execution-efficiency rules: targeted inspection, smallest
+  relevant checks while iterating, full suite/build once at the end when required,
+  no clone-local environments, avoid repeated narration, and at most three
+  independent read-only subagents when they reduce wall time.
+- README and GitHub Pages now summarize the purpose of every public version from
+  0.3.0 through 0.6.1, with canonical detailed release notes linked once.
+
+### Verification
+
+- Focused CLI/metrics/prompt tests, full pytest suite, Ruff, strict mypy, and
+  clean wheel build/install smoke.
+
 ## [0.6.0] - 2026-07-20
 
 ### Added

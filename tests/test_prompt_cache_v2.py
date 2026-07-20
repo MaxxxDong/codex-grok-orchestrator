@@ -60,6 +60,8 @@ def test_token_metrics_support_camel_snake_and_unobservable() -> None:
     missing = extract_token_metrics({"inputTokens": 10})
     assert camel.observable and camel.cache_ratio == 0.8
     assert snake.observable and snake.cache_ratio == 0.5
+    assert camel.cache_ratio_basis == "legacy_cached_over_input"
+    assert snake.cache_ratio_basis == "legacy_cached_over_input"
     assert not missing.observable
     assert missing.cached_tokens is None
     lines = "\n".join(
@@ -104,6 +106,9 @@ def test_token_metrics_support_camel_snake_and_unobservable() -> None:
     assert native.cached_tokens == 300
     assert native.output_tokens == 20
     assert native.reasoning_tokens == 11
+    assert native.input_includes_cached is False
+    assert native.cache_ratio == 300 / 700
+    assert native.cache_ratio_basis == "cached_over_fresh_plus_cached"
     pretty_native = extract_token_metrics_from_text(json.dumps(json.loads(wrapped), indent=2))
     assert pretty_native == native
 
@@ -131,3 +136,5 @@ def test_token_metrics_support_camel_snake_and_unobservable() -> None:
     assert real_native.output_tokens == 1490
     assert real_native.reasoning_tokens == 221
     assert real_native.observable
+    assert real_native.cache_ratio == 0.0
+    assert real_native.input_includes_cached is False

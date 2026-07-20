@@ -448,6 +448,28 @@
       color: var(--ink-mute);
     }
 
+    .release-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border-top: 1px solid var(--line);
+    }
+    .release-list li {
+      display: grid;
+      grid-template-columns: 5.25rem minmax(0, 1fr);
+      gap: 1rem;
+      padding: 0.85rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .release-list strong {
+      font-family: var(--mono);
+      color: var(--terracotta-deep);
+    }
+    .release-list span { color: var(--ink-soft); }
+    @media (max-width: 540px) {
+      .release-list li { grid-template-columns: 1fr; gap: 0.2rem; }
+    }
+
     .doc-links {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -871,7 +893,7 @@
           安装包后执行一次有界分析任务。实现模式使用相同形态。
         </p>
 
-        <pre data-lang-block="en"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.0"
+        <pre data-lang-block="en"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
 
 grok-worker status --source /path/to/repository --json
 
@@ -880,7 +902,7 @@ grok-worker run \
   --mode analysis \
   --task-id public-release-audit \
   --prompt "Audit packaging and release readiness. Do not edit files."</code></pre>
-        <pre data-lang-block="zh"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.0"
+        <pre data-lang-block="zh"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
 
 grok-worker status --source /path/to/repository --json
 
@@ -961,6 +983,52 @@ grok-worker run \
         <p class="video-cap" data-lang-block="zh">
           媒体：<code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-zh-final.mp4</code>
           · 海报 <code style="font-family:var(--mono);font-size:0.9em">assets/grok-worker-intro-poster.jpg</code>
+        </p>
+      </div>
+    </section>
+
+    <!-- RELEASE HISTORY -->
+    <section aria-labelledby="releases-title">
+      <div class="wrap">
+        <h2 id="releases-title">
+          <span data-lang-block="en">Release evolution</span>
+          <span data-lang-block="zh">版本演进</span>
+        </h2>
+        <p class="section-lead" data-lang-block="en">
+          Each release has one clear operational purpose. Detailed changes and verification remain in the canonical release notes.
+        </p>
+        <p class="section-lead" data-lang-block="zh">
+          每个版本解决一组明确的运行问题；详细改动与验证证据统一保留在正式发布说明中。
+        </p>
+        <ol class="release-list" data-lang-block="en">
+          <li><strong>0.6.1</strong><span>CLI compatibility, honest cache/model-call metrics, process timing, and tighter efficiency guidance.</span></li>
+          <li><strong>0.6.0</strong><span>Detached launch, event-first watch, immediate attention signals, and bounded launcher logs.</span></li>
+          <li><strong>0.5.3</strong><span>Terminal/settled/attention notifications and one-pass disclosure preflight.</span></li>
+          <li><strong>0.5.2</strong><span>Native one-shot default with normal Grok plugins, MCP, OAuth, High reasoning, and shared caches.</span></li>
+          <li><strong>0.5.1</strong><span>Native cache-permission hotfix and stable version reporting.</span></li>
+          <li><strong>0.5.0</strong><span>Native Grok Build, safe dirty snapshots, High enforcement, and native usage metrics.</span></li>
+          <li><strong>0.4.2</strong><span>Activity-renewed, runtime-adjustable leases replaced fixed startup lifetimes.</span></li>
+          <li><strong>0.4.1</strong><span>Managed isolated Grok profiles and fail-closed extension inspection.</span></li>
+          <li><strong>0.4.0</strong><span>Per-dispatcher capacity up to 10, completion events, disclosure gates, and bounded subagents.</span></li>
+          <li><strong>0.3.0</strong><span>Initial standalone public CLI, lifecycle documentation, and bilingual guidance.</span></li>
+        </ol>
+        <ol class="release-list" data-lang-block="zh">
+          <li><strong>0.6.1</strong><span>CLI 兼容、诚实缓存与模型调用指标、运行计时及执行提效规则。</span></li>
+          <li><strong>0.6.0</strong><span>分离启动、事件优先等待、即时异常通知及有界启动日志。</span></li>
+          <li><strong>0.5.3</strong><span>终态、清理、介入通知与一次性外发预检。</span></li>
+          <li><strong>0.5.2</strong><span>原生一次性任务默认路径，同时保留正常插件、MCP、OAuth、High 推理与共享缓存。</span></li>
+          <li><strong>0.5.1</strong><span>原生缓存权限热修与稳定版本报告。</span></li>
+          <li><strong>0.5.0</strong><span>原生 Grok Build、安全脏文件快照、High 强制与原生用量指标。</span></li>
+          <li><strong>0.4.2</strong><span>用可动态调整、按活动续期的租约取代固定启动寿命。</span></li>
+          <li><strong>0.4.1</strong><span>托管隔离 Grok Profile 与严格扩展检查。</span></li>
+          <li><strong>0.4.0</strong><span>单调度器最多 10 路容量、完成事件、外发门禁及有界子代理。</span></li>
+          <li><strong>0.3.0</strong><span>首个独立公开 CLI、生命周期文档与双语指南。</span></li>
+        </ol>
+        <p class="cmd-note">
+          <a href="https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/docs/releases/release-notes.md">
+            <span data-lang-block="en">Read the complete release notes</span>
+            <span data-lang-block="zh">查看完整发布说明</span>
+          </a>
         </p>
       </div>
     </section>

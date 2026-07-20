@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+import click
 import typer
 
 from grok_worker import __version__, cache_cmds, cli_cmds, session_cli
@@ -52,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         result = app(args=argv, standalone_mode=False)
     except typer.Exit as exc:
         return int(exc.exit_code) if exc.exit_code is not None else 0
+    except click.ClickException as exc:
+        # Usage errors (unknown options, bad parameters) must print Click's
+        # concise message — never an uncaught Python/Rich traceback.
+        exc.show()
+        return int(exc.exit_code)
     except SystemExit as exc:
         code = exc.code
         if code is None:

@@ -100,6 +100,21 @@ def test_stable_prompt_forbids_disposable_paths_in_project_artifacts() -> None:
     assert "Never write the disposable clone path" in prompt
 
 
+def test_stable_prompt_includes_execution_efficiency_rules() -> None:
+    from grok_worker.prompt_cache import build_one_shot_prompt
+
+    prompt = build_one_shot_prompt(SKILL_ROOT, "implementation", TASK_IMPL)
+    lower = prompt.lower()
+    assert "execution efficiency" in lower
+    assert "targeted" in lower or "targeted reads" in lower
+    assert "smallest relevant" in lower
+    assert "full suite" in lower
+    assert "clone-local" in lower or "clone-local `.venv`" in prompt
+    assert "never create a clone-local" in lower or "never create a" in lower
+    assert "subagents" in lower
+    assert "independent" in lower
+
+
 def test_debug_role_prompt_defines_findings_object_shape() -> None:
     from grok_worker.prompt_cache import Role, _load_base_and_role
 

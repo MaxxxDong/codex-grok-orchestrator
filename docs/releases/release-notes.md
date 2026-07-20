@@ -7,6 +7,45 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-20 — CLI compatibility, honest cache metrics / CLI 兼容与诚实缓存指标
+
+**Version:** `grok-worker` 0.6.1
+
+Maintenance release: `cache-status --json` and `cache-gc --json` are accepted
+compatibility flags without changing the single-JSON output. Invalid CLI options
+now surface Click's concise usage error instead of a Python/Rich traceback when
+the entry point runs with `standalone_mode=False`.
+
+Token metrics distinguish Grok separate cache-read input from OpenAI nested
+cached tokens, persist a bounded `cache_ratio` with a machine-readable basis
+(or null for incoherent totals),
+and optionally record `model_calls` from `num_turns` / `modelCalls`. One-shot
+runs also record monotonic `process_duration_seconds`. The stable Worker prompt
+adds concise execution-efficiency rules (targeted inspection, smallest checks
+while iterating, full suite once at the end when required, no clone-local
+environments, limited independent subagents).
+
+维护发布：`cache-status --json` 与 `cache-gc --json` 作为兼容标志被接受，输出
+仍是单一 JSON。入口在 `standalone_mode=False` 下对非法选项返回 Click 简洁用法
+错误，而不再抛出 Python/Rich 堆栈。
+
+Token 指标区分 Grok 独立 cache-read 与 OpenAI 嵌套 cached tokens，持久化有界
+`cache_ratio` 与 basis，并可选记录 `model_calls`。一次性运行额外记录单调时钟
+`process_duration_seconds`。稳定 Worker 提示补充执行效率规则。
+
+The repository README and GitHub Pages landing page now include a bilingual
+version-evolution summary from 0.3.0 through 0.6.1. This page remains the
+canonical detailed history instead of duplicating full release notes on every
+surface.
+
+仓库 README 与 GitHub Pages 首页新增 0.3.0 至 0.6.1 的双语版本演进摘要；本文件
+继续作为详细发布历史的唯一权威来源，避免在多个页面重复维护完整说明。
+
+Release verification: focused CLI/metrics/prompt tests, full pytest suite, Ruff,
+strict mypy, and clean wheel build/install smoke.
+
+---
+
 ## 2026-07-20 — Detached event-first orchestration / 分离启动与事件优先编排
 
 **Version:** `grok-worker` 0.6.0

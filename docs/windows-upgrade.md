@@ -1,9 +1,17 @@
-# Windows / WSL upgrade: 0.3-0.5.3 to 0.6.0
+# Windows / WSL upgrade: 0.3-0.5.3 to 0.6.1
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
+
+## What changes in 0.6.1
+
+- `cache-status --json` and `cache-gc --json` are accepted compatibility flags.
+- Invalid CLI options print a concise Click usage error (no Python/Rich traceback).
+- Metrics persist bounded cache ratios with an explicit basis, optional
+  `model_calls`, and monotonic `process_duration_seconds` for one-shot runs.
+- The stable Worker prompt includes concise execution-efficiency rules.
 
 ## What changes in 0.6.0
 
@@ -75,7 +83,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.6.0 --depth 1 \
+git clone --branch v0.6.1 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 
