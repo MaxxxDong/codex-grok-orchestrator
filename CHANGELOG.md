@@ -19,6 +19,16 @@ All notable public changes are recorded here. The project follows semantic versi
 - Explicit execution-contract `finalGates` are now executed by the runner, which
   atomically records authoritative verification logs and replaces same-command
   model claims with the observed exit code.
+- Run-specific notification receipts avoid repeatedly reparsing the global event
+  history. A missing durable terminal receipt now retains the successful clone,
+  and watch performs a low-frequency lifecycle fallback instead of reporting a
+  cleaned successful run as missing.
+- Runner-owned final gates are omitted from the model prompt, execute once with a
+  shared remaining hard-time budget, and stop after the first failed gate. Metrics
+  are written afterwards with backend, verification, total, and final-exit fields.
+- Automatic budget continuation now stops after a repeated identical failure with
+  no observable workspace/result/verification progress, preserving manual
+  continuation rather than generating an unbounded series of paid calls.
 
 ### Fixed
 

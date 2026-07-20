@@ -389,10 +389,12 @@ finish, the run remains failed, the exact clone/session gets compatible
 continuation metadata, and the budget error remains the primary lifecycle cause;
 a missing structured result is only a secondary contract consequence.
 
-When an execution manifest supplies `finalGates`, the runner executes those exact
-commands after native structured output, writes atomic `runner-gate-*` evidence,
-and uses the observed exit codes. Model-authored verification logs remain valid
-for other checks, but cannot override runner-owned final-gate evidence.
+When an execution manifest supplies `finalGates`, they are runner-owned and are
+not included as executable commands in the Grok prompt. Grok may run
+`focusedChecks` while editing; after native structured output the runner executes
+each final gate exactly once, writes atomic `runner-gate-*` evidence, and uses the
+observed exit codes. Gates share the remaining hard-time budget and stop after the
+first failure.
 
 ### Lifecycle / observability
 
@@ -402,7 +404,10 @@ for other checks, but cannot override runner-owned final-gate evidence.
   pointer; one-shot cleanup then appends `settled`. Startup failures that occur
   after CLI configuration emit `attention`. Events are deduplicated by
   `(run_id, state, kind)` and never carry prompts, tokens, env, file contents, or
-  agent output. Emit is best-effort; lifecycle remains authoritative.
+  agent output. Each modern run also has a small run-specific receipt so a watcher
+  does not repeatedly parse global history. Emit remains fail-closed: if terminal
+  receipt persistence fails, a successful clone is retained and the lifecycle
+  fallback reports the notification fault instead of losing the outcome.
 - **Default waiting**: for one run, call `grok-worker watch --until-settled` with
   its explicit `run_id`; it consumes `terminal` and waits through cleanup for
   `settled` in the same command. For a parallel wave, use one dispatcher-scoped

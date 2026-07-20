@@ -122,6 +122,7 @@ class WorkerMeta:
     # Bounded runner-owned classification. This never contains provider output.
     failure_kind: str | None = None
     continuation_ready: bool = False
+    terminal_event_ready: bool = False
     legacy_classification: str | None = None
     source_state_fingerprint: str | None = None
     interrupted: bool = False
@@ -178,6 +179,7 @@ class WorkerMeta:
             error_message=data.get("error_message"),
             failure_kind=_optional_str(data.get("failure_kind")),
             continuation_ready=bool(data.get("continuation_ready", False)),
+            terminal_event_ready=bool(data.get("terminal_event_ready", False)),
             legacy_classification=data.get("legacy_classification"),
             source_state_fingerprint=data.get("source_state_fingerprint"),
             interrupted=bool(data.get("interrupted", False)),

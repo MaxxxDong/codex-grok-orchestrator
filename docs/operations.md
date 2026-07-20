@@ -10,6 +10,7 @@ worker state.
 |---|---|---|
 | `.grok-worker/lifecycle.json` | Authoritative worker state | — |
 | `$CACHE/notifications/completion-events.jsonl` | Notification index only | Second state source; sensitive payloads |
+| `$CACHE/run-events/<run-hash>.jsonl` | Small durable per-run notification receipt, governed by cache TTL/LRU | Prompt, token, env, or file content storage |
 | `.grok-worker/progress.json` | Advisory activity hints | Override lifecycle phase/state |
 | External three-file artifact | Verified success evidence | Fake readiness via progress alone |
 
@@ -85,10 +86,12 @@ pre-existing system tools or an explicitly supplied absolute interpreter.
 
 When a managed worker reaches a terminal state (`success`, `failed`, `keep`, …),
 the runner appends an immediate `terminal` JSON line. After one-shot session and
-clone cleanup finishes, it appends a distinct `settled` line under:
+clone cleanup finishes, it appends a distinct `settled` line to the global index
+and, for modern runs, a small hash-addressed per-run receipt:
 
 ```text
 $SHARED_CACHE_ROOT/notifications/completion-events.jsonl
+$SHARED_CACHE_ROOT/run-events/<sha256(run_id)>.jsonl
 ```
 
 Shared cache root resolution uses `GROK_WORKER_CACHE_ROOT`, then
@@ -125,9 +128,10 @@ file contents.
 - Re-finalize / re-reconcile of the same terminal pair does not append again.
 - Appends take an exclusive lock beside the log; writes are full JSON lines with
   flush/fsync so concurrent writers do not leave half-line JSON.
-- **Best-effort only**: notification I/O or serialization failures never reverse
-  an already-persisted lifecycle terminal state, `RunOutcome`, artifact path, or
-  GC dead-worker reconcile. Callers treat emit as advisory.
+- Notification I/O or serialization failures never reverse an already-persisted
+  lifecycle result or artifact. However, a successful clone is deleted only after
+  its terminal run receipt is durable. If persistence fails, the clone is retained
+  and run-specific watch surfaces the lifecycle fault within its fallback interval.
 - Readers **discard** malformed JSONL rows, empty objects (`{}`), missing
   required pointer fields, and wrong-typed values; they never surface incomplete
   rows as events.
@@ -189,7 +193,9 @@ grok-worker watch \
   --json
 ```
 
-For one `run_id`, `--until-settled` keeps the same event wait through terminal and
+For one `run_id`, watch reads the small per-run receipt. Dispatcher/global waits
+reparse the global index only when its size or modification time changes, rather
+than on every 50 ms wake check. `--until-settled` keeps the same event wait through terminal and
 cleanup settlement; a running attention event still returns immediately. Without
 that flag, the command returns on the first matching terminal, settled, or
 attention event. Otherwise it returns one `kind=heartbeat` snapshot after the
@@ -548,10 +554,13 @@ Native budget exhaustion (`max_tokens_truncation` or `max_turns_reached`) uses t
 same mechanism automatically inside one lifecycle. It does not synthesize success:
 the continued turn must still produce a valid result and real verification.
 
-When `execution.finalGates` is nonempty, the runner executes each exact gate in
-the worker clone after native structured output and stores atomic
-`.grok-output/verification/runner-gate-*` logs. The observed exit codes replace
-same-command model claims and participate in the existing fail-closed result gate.
+When `execution.finalGates` is nonempty, the commands are omitted from the Grok
+prompt and executed exactly once by the runner after native structured output.
+The runner stores atomic `.grok-output/verification/runner-gate-*` logs. Gates
+share the remaining hard-time budget, stop on first failure, and their observed
+exit codes participate in the existing fail-closed result gate. Final metrics are
+persisted only after this phase and distinguish backend, verification, and total
+duration.
 
 Disable runner-owned JSON Schema result capture (ACP-like disk `result.json`):
 

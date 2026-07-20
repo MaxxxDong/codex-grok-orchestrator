@@ -10,6 +10,7 @@ artifact path, or GC reconcile result.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -64,6 +65,7 @@ _OPTIONAL_BOOL_KEYS = (
 NOTIFICATIONS_DIR = "notifications"
 COMPLETION_EVENTS_LOG = "completion-events.jsonl"
 COMPLETION_EVENTS_LOCK = "completion-events.lock"
+RUN_EVENTS_DIR = "run-events"
 
 # Exceptions that belong only to the notification I/O / serialization boundary.
 # Callers of the best-effort emit path must not let these reverse lifecycle work.
@@ -80,6 +82,12 @@ def completion_events_path(shared_cache_root: Path) -> Path:
 
 def completion_events_lock_path(shared_cache_root: Path) -> Path:
     return Path(shared_cache_root) / NOTIFICATIONS_DIR / COMPLETION_EVENTS_LOCK
+
+
+def run_completion_events_path(shared_cache_root: Path, run_id: str) -> Path:
+    """Return the bounded per-run receipt log used by run-specific watchers."""
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+    return Path(shared_cache_root) / RUN_EVENTS_DIR / f"{digest}.jsonl"
 
 
 def _resolve_shared(shared_cache_root: Path | None) -> Path:
@@ -158,6 +166,20 @@ def _read_events_unlocked(log_path: Path) -> list[dict[str, Any]]:
         if event is not None:
             rows.append(event)
     return rows
+
+
+def _append_event_line(log_path: Path, event: dict[str, Any]) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+        try:
+            import os
+
+            os.fsync(fh.fileno())
+        except OSError:
+            pass
 
 
 def _event_kind(event: dict[str, Any]) -> str:
@@ -275,7 +297,8 @@ def emit_completion_event(
             return None
         event = validated
         with lock:
-            existing = _read_events_unlocked(log_path)
+            run_log = run_completion_events_path(shared, str(run_id)) if run_id else None
+            existing = _read_events_unlocked(run_log or log_path)
             if run_id:
                 if _has_run_state_kind(
                     existing,
@@ -293,18 +316,15 @@ def emit_completion_event(
                 reason_code,
             ):
                 return None
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
-            with log_path.open("a", encoding="utf-8") as fh:
-                fh.write(line)
-                fh.flush()
+            if run_log is not None:
+                _append_event_line(run_log, event)
                 try:
-                    import os
-
-                    os.fsync(fh.fileno())
-                except OSError:
-                    # fsync is best-effort; the line is already flushed.
+                    _append_event_line(log_path, event)
+                except _NOTIFICATION_IO_ERRORS:
+                    # The run receipt is sufficient for the run-specific watch path.
                     pass
+            else:
+                _append_event_line(log_path, event)
         return event
     except _NOTIFICATION_IO_ERRORS:
         # Advisory only: never reverse authoritative lifecycle / GC work.
@@ -329,11 +349,26 @@ def list_completion_events(
     """
     wait = validate_wait_seconds(wait_seconds)
     shared = _resolve_shared(shared_cache_root)
-    log_path = completion_events_path(shared)
+    global_log_path = completion_events_path(shared)
+    run_log_path = run_completion_events_path(shared, run_id) if run_id else None
     deadline = time.monotonic() + max(0.0, float(wait))
+    last_path: Path | None = None
+    last_signature: tuple[int, int] | None | object = object()
+    cached_rows: list[dict[str, Any]] = []
 
-    def _slice() -> list[dict[str, Any]]:
-        rows = _read_events_unlocked(log_path)
+    def _current_path() -> Path:
+        if run_log_path is not None and run_log_path.is_file():
+            return run_log_path
+        return global_log_path
+
+    def _signature(path: Path) -> tuple[int, int] | None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def _slice(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if after:
             idx = None
             for i, row in enumerate(rows):
@@ -352,7 +387,13 @@ def list_completion_events(
         return rows
 
     while True:
-        matched = _slice()
+        path = _current_path()
+        signature = _signature(path)
+        if path != last_path or signature != last_signature:
+            cached_rows = _read_events_unlocked(path)
+            last_path = path
+            last_signature = signature
+        matched = _slice(cached_rows)
         if matched:
             return matched
         if wait <= 0 or time.monotonic() >= deadline:
@@ -374,6 +415,7 @@ __all__ = [
     "EventWaitError",
     "completion_events_path",
     "completion_events_lock_path",
+    "run_completion_events_path",
     "emit_completion_event",
     "events_to_payload",
     "list_completion_events",

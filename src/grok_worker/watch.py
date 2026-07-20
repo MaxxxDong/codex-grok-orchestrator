@@ -12,6 +12,7 @@ from grok_worker.health import collect_health
 
 _ACTIVE_STATES = frozenset({"creating", "running", "finalizing", "session_open"})
 _ATTENTION_STATES = frozenset({"failed", "startup_failed", "worker_crashed"})
+_HEALTH_FALLBACK_SECONDS = 1.0
 _HEALTH_KEYS = (
     "task_id",
     "run_id",
@@ -26,6 +27,7 @@ _HEALTH_KEYS = (
     "hard_remaining_seconds",
     "result_ready",
     "artifact_ready",
+    "terminal_event_ready",
     "active",
     "runner_live",
     "process_live",
@@ -95,14 +97,46 @@ def watch_workers(
     delivered: list[dict[str, Any]] = []
     while True:
         remaining = max(0.0, deadline - monotonic())
+        event_wait = min(remaining, _HEALTH_FALLBACK_SECONDS) if run_id else remaining
         events = list_completion_events(
             shared_cache_root=shared_cache_root,
             after=cursor,
-            wait_seconds=remaining,
+            wait_seconds=event_wait,
             run_id=run_id,
             dispatcher_id=dispatcher_id,
         )
         if not events:
+            if run_id and remaining > event_wait:
+                report = collect_health(disposable_root, dispatcher_id=dispatcher_id)
+                rows = [row for row in report.clones if row.get("run_id") == run_id]
+                terminal = [
+                    row
+                    for row in rows
+                    if str(row.get("state") or "") not in _ACTIVE_STATES
+                ]
+                if terminal and not delivered:
+                    compact = [_compact_health(row) for row in terminal]
+                    return {
+                        "kind": "heartbeat",
+                        "events": [],
+                        "count": 0,
+                        "next_cursor": cursor,
+                        "attention_required": True,
+                        "reason_code": "terminal_notification_missing",
+                        "workers": compact,
+                        "health_interval_seconds": report.interval_seconds,
+                    }
+                if delivered and not rows:
+                    return {
+                        "kind": "events",
+                        "events": delivered,
+                        "count": len(delivered),
+                        "next_cursor": cursor,
+                        "attention_required": True,
+                        "reason_code": "settled_notification_missing_after_cleanup",
+                        "settled": False,
+                    }
+                continue
             break
         batch = [_with_delivery_latency(item) for item in events]
         delivered.extend(batch)

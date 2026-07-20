@@ -316,12 +316,74 @@ def test_finalize_succeeds_when_notification_io_fails(
         acpx_bin=str(path_with_fake_acpx),
         prepare_deps=False,
         task_id="evt-notify-io-fail",
-        skip_post_gc=True,
     )
     outcome = run_worker(cfg)
     assert outcome.exit_code == 0
     assert outcome.state == "success"
     assert outcome.artifact_path is not None
+    assert outcome.clone_path is not None
+    assert Path(outcome.clone_path).is_dir()
+    assert "notification was not durable" in outcome.message
+
+
+def test_run_event_receipt_survives_global_index_failure(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grok_worker import completion_events as ce
+
+    shared = tmp_roots["shared"]
+    blocked = shared / "notifications" / "blocked-global"
+    blocked.mkdir(parents=True)
+    monkeypatch.setattr(ce, "completion_events_path", lambda _root: blocked)
+
+    event = ce.emit_completion_event(
+        task_id="receipt-task",
+        state="success",
+        run_id="receipt-run",
+        kind="terminal",
+        shared_cache_root=shared,
+    )
+
+    assert event is not None
+    assert ce.run_completion_events_path(shared, "receipt-run").is_file()
+    listed = ce.list_completion_events(
+        shared_cache_root=shared,
+        run_id="receipt-run",
+        wait_seconds=0,
+    )
+    assert [item["kind"] for item in listed] == ["terminal"]
+
+
+def test_wait_does_not_reparse_unchanged_full_log(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = tmp_roots["shared"]
+    emit_completion_event(
+        task_id="existing",
+        state="success",
+        run_id="existing-run",
+        shared_cache_root=shared,
+    )
+    log_path = _notification_log(shared).resolve()
+    original = Path.read_text
+    reads = 0
+
+    def counting_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal reads
+        if path.resolve() == log_path:
+            reads += 1
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    assert not list_completion_events(
+        shared_cache_root=shared,
+        run_id="missing-run",
+        wait_seconds=0.2,
+        poll_interval=0.01,
+    )
+    assert reads <= 2
 
 
 def test_dead_reconcile_fails_even_when_notification_fails(
@@ -752,6 +814,47 @@ def test_watch_until_settled_requires_one_run(
 
     assert code == 2
     assert "requires --run-id" in capsys.readouterr().err
+
+
+def test_watch_surfaces_terminal_lifecycle_when_notification_is_missing(
+    tmp_roots: dict[str, Path],
+) -> None:
+    from grok_worker.watch import watch_workers
+
+    clone = tmp_roots["disposable"] / "watch-missing-event"
+    clone.mkdir()
+    meta = _write_dead_running_clone(clone, "watch-missing-event")
+    meta.run_id = "watch-missing-event-run"
+    meta.write(meta_path(clone))
+
+    def finish_without_event() -> None:
+        time.sleep(0.1)
+        current = WorkerMeta.read(meta_path(clone))
+        current.state = WorkerState.SUCCESS
+        current.runner_pid = None
+        current.runner_start_token = None
+        current.pid = None
+        current.artifact_complete = True
+        current.touch()
+        current.write(meta_path(clone))
+
+    thread = threading.Thread(target=finish_without_event)
+    thread.start()
+    started = time.monotonic()
+    payload = watch_workers(
+        shared_cache_root=tmp_roots["shared"],
+        disposable_root=tmp_roots["disposable"],
+        wait_seconds=2,
+        run_id="watch-missing-event-run",
+    )
+    elapsed = time.monotonic() - started
+    thread.join(timeout=1)
+
+    assert elapsed < 1.5
+    assert payload["kind"] == "heartbeat"
+    assert payload["reason_code"] == "terminal_notification_missing"
+    assert payload["workers"][0]["state"] == "success"
+    assert payload["workers"][0]["terminal_event_ready"] is False
 
 
 def test_watch_timeout_returns_compact_healthy_heartbeat(

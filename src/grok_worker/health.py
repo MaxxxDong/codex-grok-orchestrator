@@ -62,6 +62,7 @@ def inspect_clone_health(meta: WorkerMeta, clone: Path) -> dict[str, Any]:
         "lease_revision": summary.get("lease_revision"),
         "result_ready": summary.get("result_ready"),
         "artifact_ready": summary.get("artifact_ready"),
+        "terminal_event_ready": meta.terminal_event_ready,
         "active": active,
         "runner_pid": meta.runner_pid,
         "runner_live": runner_live,

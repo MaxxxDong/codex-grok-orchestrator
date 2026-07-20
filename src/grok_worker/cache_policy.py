@@ -22,6 +22,7 @@ CACHE_BUCKETS = (
     "poetry",
     "metrics",
     "launch-logs",
+    "run-events",
 )
 
 

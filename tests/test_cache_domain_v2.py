@@ -114,6 +114,25 @@ def test_cache_gc_removes_stale_detached_launch_logs(tmp_path: Path) -> None:
     assert "launch-logs/old.log" in report.removed
 
 
+def test_cache_gc_removes_stale_run_event_receipts(tmp_path: Path) -> None:
+    from grok_worker.cache_policy import CachePolicy, gc_shared_cache
+
+    root = tmp_path / "cache"
+    stale = root / "run-events" / "old.jsonl"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}\n", encoding="utf-8")
+    now = time.time()
+    os.utime(stale, (now - 10_000, now - 10_000))
+
+    report = gc_shared_cache(
+        CachePolicy(root=root, max_bytes=1024, ttl_hours=1),
+        now=now,
+    )
+
+    assert not stale.exists()
+    assert "run-events/old.jsonl" in report.removed
+
+
 def test_cache_gc_defers_while_worker_lease_is_held(tmp_path: Path) -> None:
     from grok_worker.cache_policy import CachePolicy, cache_use_lease, gc_shared_cache
 

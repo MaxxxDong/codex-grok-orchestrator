@@ -131,6 +131,24 @@ class ExecutionContract:
             payload["requiredFailedGates"] = list(self.required_failed_gates)
         return payload
 
+    def to_worker_prompt_dict(self) -> dict[str, object]:
+        """Return editing guidance while keeping final execution runner-owned."""
+        payload = self.to_dict()
+        payload.pop("finalGates", None)
+        payload.pop("requiredFailedGates", None)
+        final_count = len(self.runner_final_gates())
+        if final_count:
+            payload["runnerOwnsFinalGates"] = True
+            payload["runnerFinalGateCount"] = final_count
+            payload["finalGateInstruction"] = (
+                "Do not execute runner-owned final gates; the lifecycle runner executes them once."
+            )
+        return payload
+
+    def runner_final_gates(self) -> tuple[str, ...]:
+        """Concrete commands the lifecycle runner owns and executes exactly once."""
+        return tuple(dict.fromkeys((*self.final_gates, *self.required_failed_gates)))
+
     def signature(self) -> str:
         encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()

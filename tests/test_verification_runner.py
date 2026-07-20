@@ -89,3 +89,23 @@ def test_runner_routes_explicit_pwsh_command_without_losing_nested_script(
     record = result.verification[0]
     assert record.exit_code == 0
     assert (tmp_path / record.log_path).read_text(encoding="utf-8").strip() == "verified"
+
+
+def test_runner_stops_after_failed_gate_and_respects_total_budget(tmp_path: Path) -> None:
+    executable = f'"{sys.executable}"' if os.name == "nt" else sys.executable
+    marker = tmp_path / "must-not-run.txt"
+    slow_failure = f'{executable} -c "import time; time.sleep(1)"'
+    later = f'{executable} -c "from pathlib import Path; Path(r\'{marker}\').write_text(\'ran\')"'
+
+    result = capture_final_gate_evidence(
+        tmp_path,
+        _result(slow_failure),
+        (slow_failure, later),
+        env=dict(os.environ),
+        timeout_seconds=10,
+        total_timeout_seconds=0.1,
+    )
+
+    assert len(result.verification) == 1
+    assert result.verification[0].exit_code == 124
+    assert not marker.exists()

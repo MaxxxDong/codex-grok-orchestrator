@@ -51,6 +51,26 @@ def test_execution_contract_expands_risk_and_preserves_failed_gates() -> None:
         assert_gates_not_narrowed(matrix, ["pytest -q"])
 
 
+def test_worker_prompt_hides_runner_owned_final_gates() -> None:
+    contract = ExecutionContract.from_mapping(
+        {
+            "targetFiles": ["src/a.py"],
+            "focusedChecks": ["pytest tests/test_a.py -q"],
+            "finalGates": ["pytest -q"],
+            "requiredFailedGates": ["ruff check ."],
+        }
+    )
+
+    payload = contract.to_worker_prompt_dict()
+
+    assert payload["targetFiles"] == ["src/a.py"]
+    assert payload["focusedChecks"] == ["pytest tests/test_a.py -q"]
+    assert payload["runnerOwnsFinalGates"] is True
+    assert payload["runnerFinalGateCount"] == 2
+    assert "finalGates" not in payload
+    assert "requiredFailedGates" not in payload
+
+
 def test_subtasks_hard_cap_and_readonly() -> None:
     with pytest.raises(ExecutionContractError):
         ExecutionContract.from_mapping(

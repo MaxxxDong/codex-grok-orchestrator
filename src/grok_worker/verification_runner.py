@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from shutil import which
 
@@ -75,7 +76,7 @@ def _run_gate(
     *,
     index: int,
     env: dict[str, str],
-    timeout_seconds: int,
+    timeout_seconds: float,
 ) -> VerificationRecord:
     if not command.strip():
         raise VerificationRunnerError("final gate command must be nonempty")
@@ -110,7 +111,7 @@ def _run_gate(
 
                 terminate_process_tree(process)
                 timeout_line = (
-                    f"\n[grok-worker] verification timed out after {timeout_seconds}s\n"
+                    f"\n[grok-worker] verification timed out after {timeout_seconds:g}s\n"
                 )
                 stream.write(timeout_line.encode())
                 exit_code = 124
@@ -118,6 +119,10 @@ def _run_gate(
             os.fsync(stream.fileno())
         atomic_replace(tmp_name, final)
     except Exception:
+        if process is not None and process.poll() is None:
+            from grok_worker.activity_lease import terminate_process_tree
+
+            terminate_process_tree(process)
         try:
             os.unlink(tmp_name)
         except OSError:
@@ -133,21 +138,29 @@ def capture_final_gate_evidence(
     final_gates: tuple[str, ...],
     *,
     env: dict[str, str],
-    timeout_seconds: int,
+    timeout_seconds: float,
+    total_timeout_seconds: float | None = None,
 ) -> WorkerResult:
     """Execute explicit final gates and replace same-command model claims."""
     if not final_gates:
         return result
-    captured = [
-        _run_gate(
+    captured: list[VerificationRecord] = []
+    started = time.monotonic()
+    for index, command in enumerate(final_gates, start=1):
+        gate_timeout = timeout_seconds
+        if total_timeout_seconds is not None:
+            remaining = total_timeout_seconds - (time.monotonic() - started)
+            gate_timeout = min(gate_timeout, max(0.01, remaining))
+        record = _run_gate(
             clone,
             command,
             index=index,
             env=env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=gate_timeout,
         )
-        for index, command in enumerate(final_gates, start=1)
-    ]
+        captured.append(record)
+        if record.exit_code != 0:
+            break
     commands = {record.command for record in captured}
     result.verification = [
         record for record in result.verification if record.command not in commands

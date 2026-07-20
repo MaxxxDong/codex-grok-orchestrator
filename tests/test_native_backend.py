@@ -254,6 +254,68 @@ def test_native_execution_contract_captures_runner_owned_final_gate(
     assert runner_records[0]["exit_code"] == 0
 
 
+def test_native_failed_runner_gate_updates_final_metrics(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    executable = f'"{sys.executable}"' if os.name == "nt" else sys.executable
+    gate = f'{executable} -c "raise SystemExit(7)"'
+
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="implement then let the runner verify",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-runner-gate-fails",
+            skip_post_gc=True,
+            execution=ExecutionContract.from_mapping({"finalGates": [gate]}),
+        )
+    )
+
+    assert outcome.state == "failed"
+    metrics = [
+        json.loads(line)
+        for line in (tmp_roots["shared"] / "metrics/worker-runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    record = metrics[-1]
+    assert record["backend_process_exit_code"] == 0
+    assert record["process_exit_code"] == 1
+    assert record["verification_duration_seconds"] >= 0
+    assert record["total_duration_seconds"] >= record["process_duration_seconds"]
+
+
+def test_budget_recovery_stops_repeated_failure_without_progress() -> None:
+    from grok_worker.worker_exec import _budget_continuation_allowed
+
+    assert _budget_continuation_allowed(
+        prior_continuations=0,
+        before_fingerprint="same",
+        after_fingerprint="same",
+    )
+    assert not _budget_continuation_allowed(
+        prior_continuations=1,
+        before_fingerprint="same",
+        after_fingerprint="same",
+    )
+    assert _budget_continuation_allowed(
+        prior_continuations=1,
+        before_fingerprint="before",
+        after_fingerprint="after",
+    )
+
+
 def test_native_backend_rejects_reasoning_downgrade(
     git_source: Path,
     tmp_roots: dict[str, Path],

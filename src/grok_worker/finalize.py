@@ -9,7 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from grok_worker.artifacts import ArtifactError, collect_artifacts
-from grok_worker.completion_events import emit_completion_event
+from grok_worker.completion_events import emit_completion_event, list_completion_events
 from grok_worker.continuation import DEFAULT_CONTINUATION_TTL_HOURS
 from grok_worker.deps import detect_clone_local_env
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -223,7 +223,7 @@ def _notify_terminal(
     meta: WorkerMeta,
     *,
     shared_cache_root: Path | None = None,
-) -> None:
+) -> bool:
     """Append a deduplicated completion notification for a terminal state."""
     if meta.state not in (
         WorkerState.SUCCESS,
@@ -231,9 +231,9 @@ def _notify_terminal(
         WorkerState.KEEP,
         WorkerState.LEGACY_IMPORTED,
     ):
-        return
+        return False
     root = shared_cache_root
-    emit_completion_event(
+    event = emit_completion_event(
         task_id=meta.task_id,
         state=str(meta.state),
         artifact_path=meta.artifact_path,
@@ -242,6 +242,24 @@ def _notify_terminal(
         run_id=meta.run_id,
         dispatcher_id=meta.dispatcher_id,
     )
+    ready = event is not None
+    if not ready and meta.run_id:
+        existing = list_completion_events(
+            shared_cache_root=root,
+            run_id=meta.run_id,
+            wait_seconds=0,
+        )
+        ready = any(
+            item.get("state") == str(meta.state)
+            and item.get("kind", "terminal") == "terminal"
+            for item in existing
+        )
+    meta.terminal_event_ready = ready
+    try:
+        meta.write(meta_path(Path(meta.clone_realpath)))
+    except OSError:
+        pass
+    return meta.terminal_event_ready
 
 
 def mark_failed(
@@ -503,13 +521,20 @@ def finalize_run(
             pass
 
     clone_out: str | None = str(clone)
-    if meta.state == WorkerState.SUCCESS and meta.artifact_complete:
+    if (
+        meta.state == WorkerState.SUCCESS
+        and meta.artifact_complete
+        and meta.terminal_event_ready
+    ):
         try:
             safe_rmtree(clone, disposable_root=disposable, protected=protected)
             clone_out = None
         except SafetyError as exc:
             meta.error_message = f"success but clone delete failed: {exc}"
             meta.write(meta_path(clone))
+    elif meta.state == WorkerState.SUCCESS and not meta.terminal_event_ready:
+        meta.error_message = "success retained because terminal notification was not durable"
+        meta.write(meta_path(clone))
 
     ok_states = (WorkerState.SUCCESS, WorkerState.KEEP)
     code = 0 if success and meta.state in ok_states else (meta.exit_code or 1)
@@ -519,7 +544,11 @@ def finalize_run(
         exit_code=code,
         clone_path=clone_out,
         artifact_path=str(art),
-        message="ok" if success else (meta.error_message or "task failed"),
+        message=(
+            "ok"
+            if success and meta.terminal_event_ready
+            else (meta.error_message or "task failed")
+        ),
         run_id=meta.run_id,
         dispatcher_id=meta.dispatcher_id,
     )
