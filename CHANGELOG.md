@@ -29,6 +29,8 @@ All notable public changes are recorded here. The project follows semantic versi
   relevant checks while iterating, full suite/build once at the end when required,
   no clone-local environments, avoid repeated narration, and at most three
   independent read-only subagents when they reduce wall time.
+- README and GitHub Pages now summarize the purpose of every public version from
+  0.3.0 through 0.6.1, with canonical detailed release notes linked once.
 
 ### Verification
 

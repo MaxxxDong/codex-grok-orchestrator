@@ -31,6 +31,24 @@ Worker that may recover. Launcher logs stay in the bounded shared cache. See the
 [release notes](docs/releases/release-notes.md) and
 [Windows/WSL upgrade guide](docs/windows-upgrade.md).
 
+### Version history / 版本演进
+
+| Version | Main update / 核心更新 |
+|---|---|
+| [`0.6.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.1) | CLI compatibility, honest cache/model-call metrics, monotonic process timing, and tighter execution-efficiency guidance. / CLI 兼容、诚实缓存与模型调用指标、单调运行计时及执行提效规则。 |
+| [`0.6.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.0) | Detached launch, event-first `watch`, immediate attention signals, and bounded launcher logs. / 分离启动、事件优先等待、即时异常通知及有界启动日志。 |
+| [`0.5.3`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.5.3) | Terminal/settled/attention notifications and one-pass disclosure preflight. / 终态、清理、介入通知与一次性外发预检。 |
+| [`0.5.2`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.5.2) | Native Headless became the one-shot default while normal Grok plugins, MCP, OAuth, High reasoning, and shared caches stayed available. / 原生 Headless 成为一次性任务默认路径，同时保留正常插件、MCP、OAuth、High 推理与共享缓存。 |
+| [`0.5.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.5.1) | Fixed native sandbox cache permissions and added a stable version command. / 修复原生沙箱缓存权限并加入稳定版本命令。 |
+| [`0.5.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.5.0) | Added native Grok Build execution, automatic safe dirty snapshots, High-reasoning enforcement, and native usage metrics. / 新增原生 Grok Build、安全脏文件快照、High 推理强制与原生用量指标。 |
+| [`0.4.2`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.4.2) | Replaced fixed startup lifetimes with activity-renewed, runtime-adjustable leases. / 用可动态调整、按活动续期的租约取代启动时固定寿命。 |
+| `0.4.1` | Added managed isolated Grok profiles and fail-closed extension inspection. / 新增托管隔离 Grok Profile 与严格扩展检查。 |
+| `0.4.0` | Added per-dispatcher capacity up to 10, completion events, disclosure gates, and bounded subagents. / 新增单调度器最多 10 路容量、完成事件、外发门禁及有界子代理。 |
+| `0.3.0` | Initial standalone public release with installable CLIs, lifecycle documentation, and bilingual guidance. / 首个独立公开版，提供可安装 CLI、生命周期文档与双语指南。 |
+
+Detailed behavior and verification for every release are kept in
+[release notes](docs/releases/release-notes.md) and [CHANGELOG.md](CHANGELOG.md).
+
 ---
 
 ## 中文
