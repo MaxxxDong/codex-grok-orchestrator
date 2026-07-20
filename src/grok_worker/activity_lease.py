@@ -31,6 +31,7 @@ from grok_worker.status import workspace_activity_at
 
 LEASE_SCHEMA_VERSION = 1
 LEASE_TIMEOUT_EXIT_CODE = 124
+_LIVE_OUTPUT_CHUNK_LIMIT = 64 * 1024
 
 
 class LeaseError(RuntimeError):
@@ -257,6 +258,7 @@ def run_with_activity_lease(
     initialize: bool = True,
     poll_seconds: float = LEASE_POLL_SECONDS,
     on_start: Callable[[subprocess.Popen[Any]], None] | None = None,
+    on_output: Callable[[str], None] | None = None,
 ) -> LeasedProcessResult:
     """Run one ACP process, renewing its inactivity deadline from real activity."""
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +269,19 @@ def run_with_activity_lease(
             hard_timeout_seconds=hard_timeout_seconds,
         )
     probe = ActivityProbe(clone, log, env)
+    try:
+        output_offset = log.stat().st_size
+    except OSError:
+        output_offset = 0
+
+    def notify_output_growth() -> None:
+        nonlocal output_offset
+        if on_output is None:
+            return
+        output_offset, chunk = _read_log_growth(log, output_offset)
+        if chunk:
+            on_output(chunk)
+
     with log.open("ab") as stream:
         process = subprocess.Popen(
             command,
@@ -278,6 +293,7 @@ def run_with_activity_lease(
         if on_start is not None:
             on_start(process)
         while True:
+            notify_output_growth()
             exit_code = process.poll()
             if exit_code is not None:
                 return LeasedProcessResult(int(exit_code))
@@ -317,6 +333,7 @@ def run_with_activity_lease(
                 exit_code = process.wait(timeout=max(0.01, poll_seconds))
             except subprocess.TimeoutExpired:
                 continue
+            notify_output_growth()
             return LeasedProcessResult(int(exit_code))
 
 
@@ -414,6 +431,23 @@ def _regular_file_activity(
     if (observed - now).total_seconds() > 5:
         return None
     return ActivityObservation(observed, source)
+
+
+def _read_log_growth(path: Path, offset: int) -> tuple[int, str]:
+    """Read only the newest bounded process output for live classification."""
+    try:
+        size = path.stat().st_size
+        if size <= offset:
+            return size, ""
+        start = offset
+        if size - start > _LIVE_OUTPUT_CHUNK_LIMIT:
+            start = size - _LIVE_OUTPUT_CHUNK_LIMIT
+        with path.open("rb") as stream:
+            stream.seek(start)
+            payload = stream.read(_LIVE_OUTPUT_CHUNK_LIMIT)
+    except OSError:
+        return offset, ""
+    return size, payload.decode("utf-8", errors="replace")
 
 
 def _write_lease(clone: Path, state: LeaseState) -> None:

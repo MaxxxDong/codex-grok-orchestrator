@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -32,6 +33,11 @@ from grok_worker.constants import (
     DEFAULT_HARD_TIMEOUT,
     DEFAULT_WATCH_WAIT_SECONDS,
     MAX_EVENT_WAIT_SECONDS,
+)
+from grok_worker.detached import (
+    DetachedStartError,
+    run_config_from_payload,
+    start_detached_run,
 )
 from grok_worker.disclosure import DisclosureError, disclosure_preflight
 from grok_worker.dispatcher import (
@@ -109,6 +115,49 @@ def _find_disclosure_error(exc: BaseException) -> DisclosureError | None:
     return None
 
 
+def _execute_run_config(cfg: RunConfig) -> None:
+    try:
+        outcome = run_worker(cfg)
+    except (
+        CapacityError,
+        ConcurrencyError,
+        CacheCapacityError,
+        DispatcherConcurrencyError,
+        SameSourceConflictError,
+    ) as exc:
+        _emit_startup_attention(cfg, exc, 2)
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    except Exception as exc:  # noqa: BLE001
+        _emit_startup_attention(cfg, exc, 1)
+        disclosure = _find_disclosure_error(exc)
+        if disclosure is not None and disclosure.blocked_items:
+            typer.echo("disclosure blocked paths (values omitted):", err=True)
+            for item in disclosure.blocked_items:
+                typer.echo(
+                    f"  {item['path']} reason={item['reason_code']}",
+                    err=True,
+                )
+        typer.echo(f"run failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "task_id": outcome.task_id,
+                "run_id": outcome.run_id,
+                "dispatcher_id": outcome.dispatcher_id,
+                "state": outcome.state,
+                "exit_code": outcome.exit_code,
+                "clone_path": outcome.clone_path,
+                "artifact_path": outcome.artifact_path,
+                "message": outcome.message,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(int(outcome.exit_code))
+
+
 def cmd_run(
     source: Path | None = typer.Option(
         None, "--source", help="Source repository or tree (omit with --prompt-only)"
@@ -172,6 +221,11 @@ def cmd_run(
     ),
     cache_max_bytes: int = typer.Option(DEFAULT_CACHE_MAX_BYTES, "--cache-max-bytes"),
     cache_ttl_hours: float = typer.Option(DEFAULT_CACHE_TTL_HOURS, "--cache-ttl-hours"),
+    detach: bool = typer.Option(
+        False,
+        "--detach",
+        help="Return after launch; observe with grok-worker watch instead of terminal polling",
+    ),
 ) -> None:
     """Create a disposable clone, run Grok, collect artifacts, and finalize."""
     if backend not in {"native", "acp"}:
@@ -245,46 +299,26 @@ def cmd_run(
         cache_max_bytes=cache_max_bytes,
         cache_ttl_hours=cache_ttl_hours,
     )
+    if detach:
+        try:
+            receipt = start_detached_run(cfg)
+        except DetachedStartError as exc:
+            _emit_startup_attention(cfg, exc, 1)
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(json.dumps(receipt, indent=2, sort_keys=True))
+        return
+    _execute_run_config(cfg)
+
+
+def cmd_run_detached_child() -> None:
+    """Internal detached child entry; accepts one RunConfig JSON object on stdin."""
     try:
-        outcome = run_worker(cfg)
-    except (
-        CapacityError,
-        ConcurrencyError,
-        CacheCapacityError,
-        DispatcherConcurrencyError,
-        SameSourceConflictError,
-    ) as exc:
-        _emit_startup_attention(cfg, exc, 2)
-        typer.echo(str(exc), err=True)
+        cfg = run_config_from_payload(json.loads(sys.stdin.read()))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        typer.echo(f"invalid detached run config: {exc}", err=True)
         raise typer.Exit(2) from exc
-    except Exception as exc:  # noqa: BLE001
-        _emit_startup_attention(cfg, exc, 1)
-        disclosure = _find_disclosure_error(exc)
-        if disclosure is not None and disclosure.blocked_items:
-            typer.echo("disclosure blocked paths (values omitted):", err=True)
-            for item in disclosure.blocked_items:
-                typer.echo(
-                    f"  {item['path']} reason={item['reason_code']}",
-                    err=True,
-                )
-        typer.echo(f"run failed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(
-        json.dumps(
-            {
-                "task_id": outcome.task_id,
-                "run_id": outcome.run_id,
-                "dispatcher_id": outcome.dispatcher_id,
-                "state": outcome.state,
-                "exit_code": outcome.exit_code,
-                "clone_path": outcome.clone_path,
-                "artifact_path": outcome.artifact_path,
-                "message": outcome.message,
-            },
-            indent=2,
-        )
-    )
-    raise typer.Exit(int(outcome.exit_code))
+    _execute_run_config(cfg)
 
 
 def cmd_preflight(

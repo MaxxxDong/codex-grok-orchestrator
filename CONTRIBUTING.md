@@ -30,4 +30,15 @@ Tests that exercise deletion, config apply, or cache GC must use temporary direc
 - Do not add silent provider/model fallbacks or another source of lifecycle truth.
 - Update README, operations, schema, or changelog when their contract changes.
 
+## Version discipline
+
+- Every releasable code or behavior update must choose a new semantic version
+  before it is merged for publication. Do not leave released behavior under the
+  previous version number.
+- Keep `pyproject.toml`, `grok_worker.__version__`, `uv.lock`, `CHANGELOG.md`,
+  release notes, current install commands, and upgrade documentation on the same
+  version. The public-release tests enforce this invariant.
+- Tags are immutable and use `v<version>`. Tag only the verified commit, then
+  create the GitHub Release from that exact tag.
+
 Report security-sensitive findings through the private process in [SECURITY.md](SECURITY.md), not a public issue.

@@ -12,11 +12,14 @@ Public contract:
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from grok_worker.cli import main
+from grok_worker.completion_events import list_completion_events
 from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
 from grok_worker.gc import convert_dead_worker
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -777,3 +780,71 @@ def test_run_startup_failure_emits_immediate_attention(
     assert event["run_id"] == "startup-run-1"
     assert event["attention_required"] is True
     assert event["reason_code"] == "startup_file_not_found_error"
+
+
+def test_live_provider_error_emits_attention_before_recovered_terminal(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    path_with_fake_acpx: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_ACPX_BEHAVIOR", "provider_500_then_success")
+    monkeypatch.setenv("FAKE_PROVIDER_RECOVERY_DELAY_SECONDS", "4")
+    cfg = RunConfig(
+        source=git_source,
+        prompt="recover after visible provider error",
+        backend="acp",
+        mode="analysis",
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        acpx_bin=str(path_with_fake_acpx),
+        prepare_deps=False,
+        task_id="provider-attention",
+        run_id="provider-attention-run",
+        dispatcher_id="provider-attention-dispatcher",
+        skip_post_gc=True,
+    )
+    observed: dict[str, object] = {}
+
+    def observe() -> None:
+        deadline = time.monotonic() + 3.5
+        while time.monotonic() < deadline:
+            events = list_completion_events(
+                shared_cache_root=tmp_roots["shared"],
+                wait_seconds=0,
+                run_id="provider-attention-run",
+            )
+            attention = next(
+                (event for event in events if event.get("kind") == "attention"),
+                None,
+            )
+            if attention is not None:
+                observed["attention"] = attention
+                observed["at"] = time.monotonic()
+                return
+            time.sleep(0.05)
+
+    observer = threading.Thread(target=observe)
+    observer.start()
+    outcome = run_worker(cfg)
+    finished_at = time.monotonic()
+    observer.join(timeout=1)
+
+    attention = observed.get("attention")
+    assert isinstance(attention, dict)
+    assert float(observed["at"]) < finished_at - 1
+    assert attention["state"] == "running"
+    assert attention["attention_required"] is True
+    assert attention["reason_code"] == "provider_http_5xx"
+    assert outcome.state == "success"
+    final_events = list_completion_events(
+        shared_cache_root=tmp_roots["shared"],
+        wait_seconds=0,
+        run_id="provider-attention-run",
+    )
+    assert [event.get("kind") for event in final_events] == [
+        "attention",
+        "terminal",
+        "settled",
+    ]

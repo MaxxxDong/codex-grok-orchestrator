@@ -13,7 +13,16 @@ from grok_worker.safety import SafetyError, dir_size_bytes, safe_rmtree, safe_un
 
 DEFAULT_CACHE_MAX_BYTES = 10 * 1024**3
 DEFAULT_CACHE_TTL_HOURS = 90 * 24
-CACHE_BUCKETS = ("context-packs", "venvs", "uv", "pip", "npm", "poetry", "metrics")
+CACHE_BUCKETS = (
+    "context-packs",
+    "venvs",
+    "uv",
+    "pip",
+    "npm",
+    "poetry",
+    "metrics",
+    "launch-logs",
+)
 
 
 class CacheCapacityError(RuntimeError):

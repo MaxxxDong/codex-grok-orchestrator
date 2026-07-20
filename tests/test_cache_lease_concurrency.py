@@ -74,6 +74,11 @@ def _max_concurrent(results: list[dict]) -> int:
     return maximum
 
 
+def _active_span(results: list[dict]) -> float:
+    """Measure lease activity without including multiprocessing spawn overhead."""
+    return max(result["rel"] for result in results) - min(result["got"] for result in results)
+
+
 def test_shared_leases_overlap_after_exclusive_preflight(tmp_path: Path) -> None:
     lock_path = tmp_path / "domain.lock"
     lock_path.write_text("")
@@ -102,7 +107,10 @@ def test_shared_leases_overlap_after_exclusive_preflight(tmp_path: Path) -> None
         f"shared leases serialized after EX preflight: max_concurrent={maximum}, "
         f"wall_s={wall:.3f}, waits={[round(r['wait_ms'], 1) for r in results]}"
     )
-    assert wall < hold_s * count * 0.7
+    active_span = _active_span(results)
+    assert active_span < hold_s * count * 0.7, (
+        f"shared lease activity serialized: active_span_s={active_span:.3f}, wall_s={wall:.3f}"
+    )
 
 
 def test_ensure_cache_capacity_then_shared_leases_concurrent(tmp_path: Path) -> None:
@@ -134,7 +142,10 @@ def test_ensure_cache_capacity_then_shared_leases_concurrent(tmp_path: Path) -> 
         f"ensure+shared serialized: max_concurrent={maximum}, wall_s={wall:.3f}, "
         f"waits={[round(r['wait_ms'], 1) for r in results]}"
     )
-    assert wall < hold_s * count * 0.7
+    active_span = _active_span(results)
+    assert active_span < hold_s * count * 0.7, (
+        f"ensure+shared activity serialized: active_span_s={active_span:.3f}, wall_s={wall:.3f}"
+    )
 
 
 def test_gc_still_defers_while_shared_lease_held(tmp_path: Path) -> None:

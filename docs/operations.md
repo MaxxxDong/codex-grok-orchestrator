@@ -105,7 +105,14 @@ the list is empty.
 
 ### Default low-noise watch loop
 
-Use a caller-supplied unique `run_id` so observation can start before the worker
+Codex starts one-shot work with `grok-worker run --detach`. The command sends the
+normal `RunConfig` to a detached child over a private stdin pipe and returns a
+receipt containing `run_id`, `dispatcher_id`, PID, roots, and a bounded launcher
+log path. The receipt means only that launch was accepted. The child still uses
+the same `run_worker` lifecycle, permissions, reasoning checks, cache, artifacts,
+retention, and cleanup path as foreground `run`.
+
+Use the returned unique `run_id` so observation can start before the worker
 finishes:
 
 ```bash
@@ -123,6 +130,19 @@ settled, or attention event appears. Otherwise it returns one `kind=heartbeat`
 snapshot after the bounded wait. Feed `next_cursor` into the next call. One
 dispatcher-scoped watch can cover a parallel wave. This command never reads full
 logs and never mutates, restarts, or cleans workers.
+
+Do not keep the detached launch terminal open and do not issue 10/30-second
+`write_stdin` polls. One bounded 300-second `watch` call is the routine wait; a
+terminal, settled, or attention event wakes it immediately. For parallel work,
+one dispatcher-scoped watch covers the wave. Detached launcher logs are private
+shared-cache entries governed by the same quota and TTL/LRU GC.
+
+While a Worker is still running, the 2-second lease loop classifies only bounded,
+recognizable top-level provider HTTP/auth/rate-limit/unavailable failures,
+structured ACP transport errors, and ignored reasoning effort. The first match
+emits one `running/attention` event containing only a reason code. It does not
+terminate the process: Grok may recover, and a later terminal/settled event still
+defines the outcome. Plugin-level MCP warnings do not match this classifier.
 
 On `terminal/success`, consume the verified artifact and wait once more for
 `settled`. On failure or `attention_required=true`, inspect authoritative
@@ -392,6 +412,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.5.3`. Lifecycle and artifact formats remain
+The current public release is `0.6.0`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
