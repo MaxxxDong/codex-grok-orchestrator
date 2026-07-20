@@ -9,6 +9,7 @@ from pathlib import Path
 
 from grok_worker.artifacts import ArtifactError, collect_artifacts
 from grok_worker.completion_events import emit_completion_event
+from grok_worker.continuation import DEFAULT_CONTINUATION_TTL_HOURS
 from grok_worker.deps import detect_clone_local_env
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
 from grok_worker.paths import default_shared_cache_root, meta_path
@@ -63,11 +64,7 @@ _REASONING_DOWNGRADE_RE = re.compile(
 def _bounded_failure_text(agent_output: str) -> str:
     if len(agent_output) <= _AGENT_OUTPUT_SCAN_LIMIT + _AGENT_OUTPUT_TAIL_LIMIT:
         return agent_output
-    return (
-        agent_output[:_AGENT_OUTPUT_SCAN_LIMIT]
-        + "\n"
-        + agent_output[-_AGENT_OUTPUT_TAIL_LIMIT:]
-    )
+    return agent_output[:_AGENT_OUTPUT_SCAN_LIMIT] + "\n" + agent_output[-_AGENT_OUTPUT_TAIL_LIMIT:]
 
 
 def _provider_status(text: str, *, live_only: bool = False) -> int | None:
@@ -93,9 +90,7 @@ def classify_live_backend_attention(agent_output: str) -> str | None:
         return "provider_rate_limited"
     if status is not None and 500 <= status <= 599:
         return "provider_http_5xx"
-    if _PROVIDER_UNAVAILABLE_RE.search(snippet) and _RUNTIME_ERROR_ENVELOPE_RE.search(
-        snippet
-    ):
+    if _PROVIDER_UNAVAILABLE_RE.search(snippet) and _RUNTIME_ERROR_ENVELOPE_RE.search(snippet):
         return "provider_unavailable"
     if _REASONING_DOWNGRADE_RE.search(snippet):
         return "reasoning_effort_ignored"
@@ -245,6 +240,7 @@ def apply_terminal_in_memory(
     acpx_exit: int,
     keep_reason: str | None,
     retain_hours: int,
+    keep_ttl_hours: float | None = None,
 ) -> None:
     """Set terminal fields on *meta* in memory only (not yet success-persisted)."""
     now = utc_now()
@@ -254,7 +250,9 @@ def apply_terminal_in_memory(
         meta.state = WorkerState.KEEP
         meta.keep_reason = keep_reason.strip()
         meta.exit_code = 0 if success else 1
-        meta.retention_deadline = None
+        meta.retention_deadline = (
+            dt_to_iso(now + timedelta(hours=keep_ttl_hours)) if keep_ttl_hours is not None else None
+        )
         meta.artifact_complete = True
     elif success:
         meta.state = WorkerState.SUCCESS
@@ -327,7 +325,13 @@ def finalize_run(
         meta.result_status = str(result.status)
     except (ResultError, OSError, ValueError) as exc:
         # Keep structured-result failure; also surface recognizable ACP runtime errors.
-        meta.error_message = _compose_result_error_message(exc, agent_log)
+        # Preserve a prior authoritative runner message (e.g. reasoning-effort ignored).
+        composed = _compose_result_error_message(exc, agent_log)
+        if meta.error_message:
+            if composed not in meta.error_message:
+                meta.error_message = f"{meta.error_message}; {composed}"
+        else:
+            meta.error_message = composed
         result = None  # invalid/unverified result must not count as success
 
     # Prompt-only / research never synthesizes implementation success.
@@ -340,6 +344,11 @@ def finalize_run(
             acpx_exit=acpx_exit,
             keep_reason=cfg.keep_reason,
             retain_hours=cfg.failure_retain_hours,
+            keep_ttl_hours=(
+                DEFAULT_CONTINUATION_TTL_HOURS
+                if cfg.write_continuation and cfg.backend == "native"
+                else None
+            ),
         )
     except ValueError as exc:
         mark_failed(
@@ -375,11 +384,16 @@ def finalize_run(
             session_closed = True
         else:
             session_audit = audit.get("session")
-            session_closed = (
-                isinstance(session_audit, dict) and session_audit.get("closed") is True
-            )
+            session_closed = isinstance(session_audit, dict) and session_audit.get("closed") is True
         audit["cleanup_receipt"] = {
-            "cloneDeletionAuthorized": meta.state == WorkerState.SUCCESS,
+            "cloneDeletionAuthorized": (
+                meta.state == WorkerState.SUCCESS
+                or (
+                    meta.state == WorkerState.KEEP
+                    and meta.retention_deadline is not None
+                    and cfg.write_continuation
+                )
+            ),
             "sessionClosed": session_closed,
             "requestedState": str(meta.state),
         }

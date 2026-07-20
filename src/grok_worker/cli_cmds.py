@@ -198,6 +198,51 @@ def cmd_run(
     model: str | None = typer.Option(None, "--model"),
     reasoning_effort: str | None = typer.Option(None, "--reasoning-effort"),
     allow_subagents: bool = typer.Option(True, "--allow-subagents/--no-subagents"),
+    disable_web_search: bool = typer.Option(
+        False,
+        "--disable-web-search",
+        help="Opt-in pure-code: pass --disable-web-search to native Grok",
+    ),
+    disallowed_tool: list[str] | None = typer.Option(
+        None,
+        "--disallowed-tool",
+        help="Built-in tool name to deny (repeatable); mapped to native --disallowed-tools",
+    ),
+    max_turns: int | None = typer.Option(
+        None,
+        "--max-turns",
+        help="Optional native Grok max agent turns (pathological-loop guard)",
+    ),
+    continue_task: bool = typer.Option(
+        False,
+        "--continue",
+        help="Native same-task continuation for a kept clone with valid continuation.json",
+    ),
+    write_continuation: bool = typer.Option(
+        False,
+        "--write-continuation",
+        help="After a successful --keep native run, store continuation metadata for --continue",
+    ),
+    execution_manifest: Path | None = typer.Option(
+        None,
+        "--execution-manifest",
+        help="Optional JSON file with targetFiles/focusedChecks/finalGates/riskTags/subtasks",
+    ),
+    stall_turns: int = typer.Option(
+        8,
+        "--stall-turns",
+        help="Attention after this many model turns without productive progress",
+    ),
+    stall_seconds: float = typer.Option(
+        900.0,
+        "--stall-seconds",
+        help="Attention after this many seconds without productive progress",
+    ),
+    no_native_json_schema: bool = typer.Option(
+        False,
+        "--no-native-json-schema",
+        help="Disable native JSON Schema final-result capture (ACP-like disk result.json)",
+    ),
     failure_retain_hours: int = typer.Option(
         DEFAULT_FAILURE_RETAIN_HOURS, "--failure-retain-hours"
     ),
@@ -257,6 +302,39 @@ def cmd_run(
     if keep is not None and not str(keep).strip():
         typer.echo("--keep requires a nonempty reason", err=True)
         raise typer.Exit(2)
+    if continue_task and backend != "native":
+        typer.echo("--continue requires --backend native", err=True)
+        raise typer.Exit(2)
+    if write_continuation and keep is None:
+        keep = "native continuation (TTL-bounded)"
+    if continue_task and keep is not None and not write_continuation:
+        typer.echo(
+            "--continue with --keep also requires --write-continuation; omit both to finalize",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if max_turns is not None and max_turns < 1:
+        typer.echo("--max-turns must be >= 1", err=True)
+        raise typer.Exit(2)
+    execution = None
+    if execution_manifest is not None:
+        from grok_worker.execution_contract import (
+            ExecutionContract,
+            ExecutionContractError,
+        )
+
+        try:
+            raw_exec = json.loads(execution_manifest.read_text(encoding="utf-8"))
+            if not isinstance(raw_exec, dict):
+                raise ExecutionContractError("execution manifest must be an object")
+            # Accept full task manifest (with nested execution) or bare contract.
+            nested = raw_exec.get("execution") if "execution" in raw_exec else raw_exec
+            if not isinstance(nested, dict):
+                raise ExecutionContractError("execution contract must be an object")
+            execution = ExecutionContract.from_mapping(nested)
+        except (OSError, json.JSONDecodeError, ExecutionContractError) as exc:
+            typer.echo(f"invalid --execution-manifest: {exc}", err=True)
+            raise typer.Exit(2) from exc
     disp_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
     if prompt_only:
         src: Path | None = None
@@ -298,6 +376,15 @@ def cmd_run(
         backend=backend,
         cache_max_bytes=cache_max_bytes,
         cache_ttl_hours=cache_ttl_hours,
+        disable_web_search=disable_web_search,
+        disallowed_tools=list(disallowed_tool or []),
+        max_turns=max_turns,
+        continue_task=continue_task,
+        write_continuation=write_continuation,
+        execution=execution,
+        stall_turns=stall_turns,
+        stall_seconds=stall_seconds,
+        native_json_schema_result=not no_native_json_schema,
     )
     if detach:
         try:
@@ -541,9 +628,7 @@ def cmd_events(
             after=after or "",
             wait_seconds=float(wait_seconds),
             run_id=run_id,
-            dispatcher_id=dispatcher_id
-            or os.environ.get("GROK_WORKER_DISPATCHER_ID")
-            or None,
+            dispatcher_id=dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None,
         )
     except EventWaitError as exc:
         typer.echo(str(exc), err=True)
@@ -576,9 +661,7 @@ def cmd_watch(
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Wait for completion/attention; return compact health only on timeout."""
-    disp_id = (
-        dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
-    )
+    disp_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
     try:
         payload = watch_workers(
             shared_cache_root=_shared(shared_cache_root),
@@ -603,8 +686,7 @@ def cmd_watch(
             )
         return
     typer.echo(
-        f"heartbeat workers={len(payload['workers'])} "
-        f"attention={payload['attention_required']}"
+        f"heartbeat workers={len(payload['workers'])} attention={payload['attention_required']}"
     )
     for row in payload["workers"]:
         typer.echo(
@@ -624,9 +706,7 @@ def cmd_health(
     root = _resolve_disposable(disposable_root, source)
     report = collect_health(
         root,
-        dispatcher_id=dispatcher_id
-        or os.environ.get("GROK_WORKER_DISPATCHER_ID")
-        or None,
+        dispatcher_id=dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None,
     )
     payload = report.to_dict()
     if as_json:
@@ -651,9 +731,7 @@ def cmd_config_apply(
         "--smoke-argv-json",
         help="JSON array of argv strings for smoke (shell=False)",
     ),
-    smoke_timeout: float = typer.Option(
-        30.0, "--smoke-timeout", help="Smoke timeout seconds"
-    ),
+    smoke_timeout: float = typer.Option(30.0, "--smoke-timeout", help="Smoke timeout seconds"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Atomically apply a TOML candidate with smoke test and byte-level rollback."""

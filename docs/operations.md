@@ -131,11 +131,25 @@ snapshot after the bounded wait. Feed `next_cursor` into the next call. One
 dispatcher-scoped watch can cover a parallel wave. This command never reads full
 logs and never mutates, restarts, or cleans workers.
 
+Exact duplicate attention events are suppressed per run and reason code. A
+different reason, or the same stall reason after productive recovery, remains
+observable instead of being hidden by terminal-style deduplication.
+
 Do not keep the detached launch terminal open and do not issue 10/30-second
 `write_stdin` polls. One bounded 300-second `watch` call is the routine wait; a
 terminal, settled, or attention event wakes it immediately. For parallel work,
 one dispatcher-scoped watch covers the wave. Detached launcher logs are private
 shared-cache entries governed by the same quota and TTL/LRU GC.
+
+When a terminal integration returns a `session_id` because the blocking watch is
+still running, continue that exact session with an empty blocking
+`write_stdin`/wait until the command returns. Tool-level yields may require
+another wait on the same session; this is one long-poll, not repeated
+status polling. Waiting only on an outer orchestration cell leaves the actual
+watch process unread and can add a full heartbeat interval before Root notices a
+completion event. Returned events include `watch_delivery_latency_seconds` for
+the `emitted_at` event-write to watch-return interval; `timestamp` remains the
+authoritative lifecycle-state time.
 
 While a Worker is still running, the 2-second lease loop classifies only bounded,
 recognizable top-level provider HTTP/auth/rate-limit/unavailable failures,
@@ -412,6 +426,62 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.6.1`. Lifecycle and artifact formats remain
+The current public release is `0.7.0`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
+
+### 0.7.0 CLI surface (efficiency)
+
+One-shot native (default):
+
+```bash
+grok-worker run --detach \
+  --source "$REPO" \
+  --mode implementation \
+  --task-id my-task \
+  --prompt-file ./task.md \
+  --execution-manifest ./examples/task-manifest.json \
+  --disable-web-search \
+  --disallowed-tool WebSearch \
+  --max-turns 80 \
+  --stall-turns 8 \
+  --stall-seconds 900
+```
+
+Native same-task continuation (kept clone only; not ACP):
+
+```bash
+# First turn: TTL-retain clone and write continuation metadata
+grok-worker run --source "$REPO" --mode implementation \
+  --task-id my-task --prompt-file ./task.md \
+  --write-continuation
+
+# Continue same task/source/clone/model/tools
+grok-worker run --source "$REPO" --mode implementation \
+  --task-id my-task --prompt-file ./followup.md \
+  --continue --write-continuation
+
+# Final turn without --write-continuation → normal finalize + exact session GC
+grok-worker run --source "$REPO" --mode implementation \
+  --task-id my-task --prompt-file ./finalize.md --continue
+```
+
+Disable runner-owned JSON Schema result capture (ACP-like disk `result.json`):
+
+```bash
+grok-worker run --source "$REPO" --mode implementation \
+  --prompt-file ./task.md --no-native-json-schema
+```
+
+Cache A/B metrics appear under shared-cache `metrics/worker-runs.jsonl` with
+`fresh_input_tokens`, `cached_input_tokens`, `model_calls`,
+`process_duration_seconds`, and `prompt_fingerprint`. Provider cache improvement
+is **not** claimed without comparing runs.
+
+The 0.7.0 validation compared three identical one-turn prompts in three unique
+physical clones: all had the same stable prefix fingerprint, but each reported
+only 128 cached input tokens (about 0.76%) and took 9.0-10.6 seconds. Stable
+fingerprinting is therefore diagnostic, not a cache mechanism. A real same-clone
+continuation improved observed cache ratio from 72.6% to 82.5% and process time
+from 123.6s to 42.2s for the tested follow-up; task sizes differed, so this is
+evidence for continuation reuse, not a universal speed multiplier.

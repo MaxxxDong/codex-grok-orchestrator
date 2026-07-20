@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grok-worker"
-version = "0.6.1"
+version = "0.7.0"
 description = "Lifecycle-managed, isolated Grok workers with native and ACP backends"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -37,6 +37,22 @@ Changelog = "https://github.com/MaxxxDong/codex-grok-orchestrator/blob/main/CHAN
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/grok_worker"]
+
+[tool.hatch.build.targets.sdist]
+# Worker runtime evidence and caches must never enter release artifacts.
+exclude = [
+  "/.grok-output",
+  "/.grok-worker",
+  "/.grok-disposable",
+  "/.grok-artifacts",
+  "/.uv-cache",
+  "/.venv",
+  "/.mypy_cache",
+  "/.pytest_cache",
+  "/.ruff_cache",
+  "/dist",
+  "/build",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

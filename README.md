@@ -17,17 +17,14 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-20
 
-`grok-worker` **0.6.1** is a maintenance release on top of detached event-first
-execution: CLI `--json` compatibility for cache commands, concise Click usage
-errors, bounded honest cache ratios with model-call and process-duration metrics,
-and tighter stable-prompt efficiency rules. **0.6.0** made detached, event-first
-execution the Codex default:
-`run --detach` returns a launch receipt immediately, and `watch` wakes on
-terminal, settled, or attention events with a compact 300-second heartbeat
-fallback. Detached runs reuse the existing lifecycle, High-reasoning checks,
-provider cache profile, three-file artifacts, retention, and cleanup path.
-Recognizable live provider failures wake `watch` immediately without killing a
-Worker that may recover. Launcher logs stay in the bounded shared cache. See the
+`grok-worker` **0.7.0** focuses on faster repeated repository work without
+weakening High-reasoning enforcement, isolation, cleanup, or lifecycle truth:
+bounded execution contracts (targets, focused checks, risk-expanded final
+gates), native same-task continuation, stable prompt fingerprints with honest
+cache A/B metrics, opt-in pure-code tool policy, productive-progress attention,
+and runner-owned native JSON Schema final-result capture. **0.6.1** tightened
+CLI/metrics/efficiency guidance; **0.6.0** made detached event-first
+`run --detach` + `watch` the Codex default. See the
 [release notes](docs/releases/release-notes.md) and
 [Windows/WSL upgrade guide](docs/windows-upgrade.md).
 
@@ -35,6 +32,7 @@ Worker that may recover. Launcher logs stay in the bounded shared cache. See the
 
 | Version | Main update / 核心更新 |
 |---|---|
+| [`0.7.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.0) | Execution contracts, native continuation, JSON Schema result capture, tool policy, productive progress, cache fingerprints. / 执行契约、原生续跑、JSON Schema 结果落盘、工具策略、有效进展与缓存指纹。 |
 | [`0.6.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.1) | CLI compatibility, honest cache/model-call metrics, monotonic process timing, and tighter execution-efficiency guidance. / CLI 兼容、诚实缓存与模型调用指标、单调运行计时及执行提效规则。 |
 | [`0.6.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.0) | Detached launch, event-first `watch`, immediate attention signals, and bounded launcher logs. / 分离启动、事件优先等待、即时异常通知及有界启动日志。 |
 | [`0.5.3`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.5.3) | Terminal/settled/attention notifications and one-pass disclosure preflight. / 终态、清理、介入通知与一次性外发预检。 |
@@ -130,7 +128,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.0"
 ```
 
 开发：
@@ -208,7 +206,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.6.1 升级](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.7.0 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -304,7 +302,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.0"
 ```
 
 Development:
@@ -371,7 +369,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.6.1 upgrade](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.7.0 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)

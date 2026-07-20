@@ -1,3 +1,26 @@
+## 2026-07-20 — Efficiency, continuation, and native structured results / 提效、续跑与原生结构化结果
+
+**Version:** `grok-worker` 0.7.0
+
+Bounded execution contracts let Root pass targets, failure evidence, focused
+checks, final gates, and risk tags without polluting the stable prompt prefix.
+Native same-task continuation reuses `grok --continue` under an explicit
+compatibility contract (task, source, clone, base SHA, model, High reasoning,
+tool signature, prompt version, contract hash) with TTL and exact session cleanup
+when not retained. Native implementation runs use Grok `--json-schema` so the
+lifecycle runner—not the model—atomically persists `.grok-output/result.json`.
+ACP/legacy paths keep the disk write contract. Opt-in tool policy, productive-
+progress attention, and prompt fingerprints with honest cache A/B metrics complete
+the efficiency surface. Provider cache hits are never claimed without A/B evidence;
+logical shared cwd is not applied because Grok sessions key by physical path.
+
+有界执行契约、原生同任务续跑、runner 落盘 JSON Schema 结果、可选工具策略、有效
+进展告警与稳定提示指纹。不把未证明的 provider 缓存命中写进文档；物理 clone 仍唯一。
+
+Release verification: full pytest, Ruff, mypy, sdist+wheel smoke, path/secret scan.
+
+---
+
 # Release notes / 发布说明
 
 Canonical public release history for **codex-grok-orchestrator**.

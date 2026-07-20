@@ -5,9 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
+
+from grok_worker.execution_contract import (
+    ExecutionContract,
+    ExecutionContractError,
+)
 
 
 class ManifestError(ValueError):
@@ -31,6 +37,8 @@ class TaskManifest:
     iteration_policy: str
     stop_when: str
     pause_if: str
+    # Optional bounded execution contract (dynamic suffix only).
+    execution: ExecutionContract = field(default_factory=ExecutionContract.empty)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> TaskManifest:
@@ -59,6 +67,10 @@ class TaskManifest:
             raise ManifestError("constraints must be a string list")
         if not isinstance(boundaries, dict):
             raise ManifestError("boundaries must be an object")
+        try:
+            execution = ExecutionContract.from_mapping(_execution_mapping(data))
+        except ExecutionContractError as exc:
+            raise ManifestError(str(exc)) from exc
         return cls(
             task_id=str(data["taskId"]),
             outcome=str(data["outcome"]),
@@ -68,6 +80,7 @@ class TaskManifest:
             iteration_policy=str(data["iterationPolicy"]),
             stop_when=str(data["stopWhen"]),
             pause_if=str(data["pauseIf"]),
+            execution=execution,
         )
 
     @classmethod
@@ -78,7 +91,7 @@ class TaskManifest:
         return cls.from_dict(raw)
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "taskId": self.task_id,
             "outcome": self.outcome,
             "verification": list(self.verification),
@@ -88,6 +101,29 @@ class TaskManifest:
             "stopWhen": self.stop_when,
             "pauseIf": self.pause_if,
         }
+        execution = self.execution.to_dict()
+        if execution:
+            payload["execution"] = execution
+        return payload
+
+
+def _execution_mapping(data: dict[str, object]) -> dict[str, Any] | None:
+    """Accept nested execution object or flat optional fields on the manifest."""
+    nested = data.get("execution")
+    if isinstance(nested, dict):
+        return {str(k): v for k, v in nested.items()}
+    flat_keys = (
+        "targetFiles",
+        "targetModules",
+        "knownFailureEvidence",
+        "focusedChecks",
+        "finalGates",
+        "riskTags",
+        "subtasks",
+        "requiredFailedGates",
+    )
+    flat = {key: data[key] for key in flat_keys if key in data}
+    return flat if flat else None
 
 
 @dataclass(frozen=True)
@@ -189,16 +225,33 @@ def role_for_one_shot_mode(mode: str) -> Role:
         ) from exc
 
 
-def build_one_shot_prompt(skill_root: Path | None, mode: str, task_prompt: str) -> str:
+def build_one_shot_prompt(
+    skill_root: Path | None,
+    mode: str,
+    task_prompt: str,
+    *,
+    dynamic_suffix_extra: str | None = None,
+) -> str:
     """Compose Skill-owned base + role + caller task for a one-shot run.
 
     implementation → implement role (exact disk output contract in the role prompt).
     analysis → review role (read-only; lifecycle captures the response).
+
+    Stable prefix (base + role) stays byte-stable for provider cache. Run-specific
+    guidance (execution contract, native result capture) belongs only in the
+    dynamic suffix after the one-shot delimiter.
     """
     role = role_for_one_shot_mode(mode)
     stable = _load_base_and_role(skill_root, role)
     task = task_prompt if task_prompt.endswith("\n") else f"{task_prompt.rstrip()}\n"
-    return f"{stable}{ONESHOT_TASK_DELIMITER}{task}"
+    extra = ""
+    if dynamic_suffix_extra:
+        extra = (
+            dynamic_suffix_extra
+            if dynamic_suffix_extra.endswith("\n")
+            else f"{dynamic_suffix_extra.rstrip()}\n"
+        )
+    return f"{stable}{ONESHOT_TASK_DELIMITER}{task}{extra}"
 
 
 def build_prompt(

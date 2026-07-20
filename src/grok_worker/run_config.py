@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from shutil import which
 
@@ -16,7 +16,10 @@ from grok_worker.constants import (
     DEFAULT_HARD_TIMEOUT,
     MAX_CONCURRENT_WORKERS,
 )
+from grok_worker.execution_contract import ExecutionContract
+from grok_worker.native_result import json_schema_cli_argument
 from grok_worker.settings import default_model, default_reasoning_effort
+from grok_worker.tool_policy import ToolPolicy, apply_native_tool_flags
 
 
 @dataclass
@@ -53,6 +56,21 @@ class RunConfig:
     # One-shot execution uses Grok Build headless directly. ACP remains an
     # explicit compatibility backend and powers named sessions in v0.5.
     backend: str = "native"
+    # Opt-in pure-code tool constraints (native flags only; no prefill profiles).
+    disable_web_search: bool = False
+    disallowed_tools: list[str] = field(default_factory=list)
+    max_turns: int | None = None
+    # Native same-task continuation (explicit; not ACP).
+    continue_task: bool = False
+    # Persist continuation metadata after a successful native keep run.
+    write_continuation: bool = False
+    # Bounded execution contract for dynamic prompt suffix / final matrix.
+    execution: ExecutionContract | None = None
+    # Productive-progress stall thresholds (attention only; never kill alone).
+    stall_turns: int = 8
+    stall_seconds: float = 900.0
+    # Native JSON Schema final-result capture (default on for native one-shot).
+    native_json_schema_result: bool = True
 
     def __post_init__(self) -> None:
         if not self.model:
@@ -63,6 +81,20 @@ class RunConfig:
             self.include_dirty_paths = []
         if self.backend not in {"native", "acp"}:
             raise ValueError("backend must be native or acp")
+        if self.max_turns is not None and self.max_turns < 1:
+            raise ValueError("max_turns must be >= 1 when set")
+        if self.continue_task and self.backend != "native":
+            raise ValueError("continue_task requires backend=native")
+        if self.disallowed_tools is None:
+            self.disallowed_tools = []
+
+    def tool_policy(self) -> ToolPolicy:
+        return ToolPolicy.from_fields(
+            disable_web_search=self.disable_web_search,
+            disallowed_tools=self.disallowed_tools,
+            allow_subagents=self.allow_subagents,
+            max_turns=self.max_turns,
+        )
 
 
 @dataclass
@@ -132,9 +164,7 @@ def default_grok_bin() -> str:
     raise FileNotFoundError("cannot locate grok; install Grok Build or set PATH")
 
 
-def check_grok_environment(
-    grok_bin: str, *, cwd: Path, environ: dict[str, str]
-) -> str | None:
+def check_grok_environment(grok_bin: str, *, cwd: Path, environ: dict[str, str]) -> str | None:
     """Run an advisory native-config probe without gating plugins or MCP."""
     try:
         completed = subprocess.run(
@@ -158,8 +188,15 @@ def check_grok_environment(
     return None
 
 
-def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str]:
-    read_only = cfg.mode in {"analysis", "research"}
+def build_native_cmd(
+    cfg: RunConfig,
+    clone: Path,
+    prompt_file: Path,
+    *,
+    continue_session: bool = False,
+) -> list[str]:
+    read_only = cfg.mode in {"analysis", "research"} or cfg.prompt_only
+    policy = cfg.tool_policy()
     cmd = [
         default_grok_bin(),
         "--cwd",
@@ -179,9 +216,17 @@ def build_native_cmd(cfg: RunConfig, clone: Path, prompt_file: Path) -> list[str
             cfg.reasoning_effort,
         ]
     )
-    if not cfg.allow_subagents:
-        cmd.append("--no-subagents")
-    cmd.extend(
-        ["--no-memory", "--output-format", "json", "--prompt-file", str(prompt_file)]
+    cmd = apply_native_tool_flags(cmd, policy)
+    # Same-task continuation reuses the most recent session for this clone cwd.
+    if continue_session:
+        cmd.append("--continue")
+    use_json_schema = (
+        cfg.native_json_schema_result
+        and cfg.backend == "native"
+        and not read_only
+        and cfg.mode == "implementation"
     )
+    if use_json_schema:
+        cmd.extend(["--json-schema", json_schema_cli_argument()])
+    cmd.extend(["--no-memory", "--output-format", "json", "--prompt-file", str(prompt_file)])
     return cmd

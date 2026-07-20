@@ -43,9 +43,7 @@ SENSITIVE_KEYS = frozenset(
         "stderr",
     }
 )
-REQUIRED_EVENT_KEYS = frozenset(
-    {"event_id", "task_id", "state", "timestamp", "artifact_path"}
-)
+REQUIRED_EVENT_KEYS = frozenset({"event_id", "task_id", "state", "timestamp", "artifact_path"})
 # New optional pointer fields (present on new emits when known).
 OPTIONAL_EVENT_KEYS = frozenset(
     {
@@ -184,9 +182,9 @@ def test_terminal_finalize_emits_deduped_completion_event(
         listed = payload.get("events", payload.get("items", []))
     else:
         listed = payload
-    assert any(
-        isinstance(item, dict) and item.get("task_id") == "evt-ok-01" for item in listed
-    ), f"events CLI JSON must include the completion event; got {payload!r}"
+    assert any(isinstance(item, dict) and item.get("task_id") == "evt-ok-01" for item in listed), (
+        f"events CLI JSON must include the completion event; got {payload!r}"
+    )
 
 
 def test_duplicate_reconcile_does_not_renotify(
@@ -210,8 +208,7 @@ def test_duplicate_reconcile_does_not_renotify(
 
     log_path = _notification_log(shared)
     assert log_path.is_file(), (
-        "reconcile terminal transition must write shared-cache notification log "
-        f"at {log_path}"
+        f"reconcile terminal transition must write shared-cache notification log at {log_path}"
     )
     events = _load_jsonl(log_path)
     matching = [e for e in events if e.get("task_id") == "evt-dead-01"]
@@ -515,6 +512,45 @@ def test_terminal_and_settled_have_independent_dedup_keys(
     assert [event["kind"] for event in events] == ["terminal", "settled"]
 
 
+def test_attention_dedup_preserves_distinct_reasons(
+    tmp_roots: dict[str, Path],
+) -> None:
+    from grok_worker.completion_events import emit_completion_event, list_completion_events
+
+    shared = tmp_roots["shared"]
+    first = emit_completion_event(
+        task_id="attention-task",
+        state="running",
+        run_id="attention-run",
+        kind="attention",
+        reason_code="provider_http_5xx",
+        shared_cache_root=shared,
+    )
+    second = emit_completion_event(
+        task_id="attention-task",
+        state="running",
+        run_id="attention-run",
+        kind="attention",
+        reason_code="no_productive_progress",
+        shared_cache_root=shared,
+    )
+    duplicate = emit_completion_event(
+        task_id="attention-task",
+        state="running",
+        run_id="attention-run",
+        kind="attention",
+        reason_code="no_productive_progress",
+        shared_cache_root=shared,
+    )
+    assert first is not None and second is not None
+    assert duplicate is None
+    events = list_completion_events(shared_cache_root=shared, run_id="attention-run")
+    assert [event["reason_code"] for event in events] == [
+        "provider_http_5xx",
+        "no_productive_progress",
+    ]
+
+
 def test_list_events_filter_by_run_id_and_dispatcher(
     tmp_roots: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -539,9 +575,7 @@ def test_list_events_filter_by_run_id_and_dispatcher(
     )
     only_r1 = list_completion_events(shared_cache_root=shared, run_id="r1", wait_seconds=0)
     assert len(only_r1) == 1 and only_r1[0]["run_id"] == "r1"
-    only_d2 = list_completion_events(
-        shared_cache_root=shared, dispatcher_id="d2", wait_seconds=0
-    )
+    only_d2 = list_completion_events(shared_cache_root=shared, dispatcher_id="d2", wait_seconds=0)
     assert len(only_d2) == 1 and only_d2[0]["dispatcher_id"] == "d2"
     # Unfiltered remains compatible.
     all_events = list_completion_events(shared_cache_root=shared, wait_seconds=0)
@@ -605,6 +639,7 @@ def test_watch_unblocks_on_delayed_attention_event(
         emit_completion_event(
             task_id="watch-failed",
             state="failed",
+            timestamp="2000-01-01T00:00:00+00:00",
             run_id="watch-run-1",
             dispatcher_id="watch-disp",
             kind="terminal",
@@ -636,6 +671,9 @@ def test_watch_unblocks_on_delayed_attention_event(
     assert payload["kind"] == "events"
     assert payload["attention_required"] is True
     assert payload["events"][0]["task_id"] == "watch-failed"
+    assert payload["events"][0]["timestamp"].startswith("2000-01-01")
+    assert payload["events"][0]["emitted_at"].startswith("20")
+    assert payload["events"][0]["watch_delivery_latency_seconds"] < 1.0
     assert elapsed < 1.5
 
 

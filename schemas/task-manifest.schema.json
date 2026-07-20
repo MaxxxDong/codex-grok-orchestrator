@@ -21,6 +21,110 @@
     "boundaries": {"type": "object"},
     "iterationPolicy": {"type": "string", "minLength": 1},
     "stopWhen": {"type": "string", "minLength": 1},
-    "pauseIf": {"type": "string", "minLength": 1}
+    "pauseIf": {"type": "string", "minLength": 1},
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional bounded execution contract (dynamic suffix only).",
+      "properties": {
+        "targetFiles": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Repository-relative files the worker should focus on."
+        },
+        "targetModules": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "knownFailureEvidence": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Prior failure logs or error excerpts for debug-focused runs."
+        },
+        "focusedChecks": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Small checks while iterating; not a substitute for finalGates."
+        },
+        "finalGates": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Required end-of-run checks. Never drop a previously failed gate."
+        },
+        "riskTags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "api",
+              "schema",
+              "security",
+              "cache",
+              "concurrency",
+              "build",
+              "migration",
+              "package",
+              "sdist",
+              "wheel"
+            ]
+          },
+          "description": "Expand the final verification matrix for shared/risky surfaces."
+        },
+        "subtasks": {
+          "type": "array",
+          "maxItems": 3,
+          "description": "Explicit independent read-only subtasks (optional; never forced).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "goal"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "goal": {"type": "string", "minLength": 1},
+              "readonly": {"type": "boolean", "const": true}
+            }
+          }
+        },
+        "requiredFailedGates": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Gates that previously failed; must remain in the final matrix."
+        }
+      }
+    },
+    "targetFiles": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "Flat alias for execution.targetFiles (optional)."
+    },
+    "targetModules": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "knownFailureEvidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "focusedChecks": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "finalGates": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "riskTags": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "subtasks": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {"type": "object"}
+    },
+    "requiredFailedGates": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
   }
 }

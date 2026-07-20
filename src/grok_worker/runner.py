@@ -19,11 +19,13 @@ from grok_worker.clone import (
     make_task_id,
 )
 from grok_worker.constants import MANAGED_BY, PROMPT_ONLY_SOURCE, SCHEMA_VERSION
+from grok_worker.continuation import assert_continuation_usable, read_continuation
 from grok_worker.dispatcher import (
     DispatcherLease,
     make_run_id,
     reserve_dispatcher_capacity,
 )
+from grok_worker.execution_contract import ExecutionContract
 from grok_worker.gc import gc_disposable_root
 from grok_worker.locks import root_lock
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -31,10 +33,11 @@ from grok_worker.paths import (
     default_artifact_root,
     default_disposable_root,
     default_shared_cache_root,
+    is_managed_clone,
     meta_path,
 )
 from grok_worker.run_config import RunConfig, RunOutcome, default_agent_bin
-from grok_worker.safety import SafetyError, safe_rmtree
+from grok_worker.safety import SafetyError, safe_rmtree, safe_unlink
 from grok_worker.task_id import TaskIdError, validate_task_id
 from grok_worker.worker_exec import execute_worker
 
@@ -65,9 +68,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
     if source is not None:
         disposable = (cfg.disposable_root or default_disposable_root(source)).resolve()
     else:
-        disposable = (
-            cfg.disposable_root or (Path.cwd() / ".grok-disposable")
-        ).resolve()
+        disposable = (cfg.disposable_root or (Path.cwd() / ".grok-disposable")).resolve()
     artifacts = (cfg.artifact_root or default_artifact_root(disposable)).resolve()
     shared = (cfg.shared_cache_root or default_shared_cache_root()).resolve()
     disposable.mkdir(parents=True, exist_ok=True)
@@ -125,29 +126,95 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 enforce_concurrency(disposable, cfg.max_workers)
             enforce_cap(disposable, cfg.cap_bytes)
 
-            # A retained failed clone must not prevent a deliberate retry. Keep
-            # the old evidence and allocate a fresh, returned task id.
-            requested_task_id = task_id
-            while clone_path_for(disposable, task_id).exists() or clone_path_for(
-                disposable, task_id
-            ).is_symlink():
-                stem = requested_task_id[:55].rstrip("._-") or "task"
-                task_id = f"{stem}-{make_task_id()[:6]}"
-                validate_task_id(task_id)
-
-            if cfg.prompt_only:
-                clone, base, src_fp, disclosure = create_prompt_only_workspace(
-                    disposable, task_id
+            if cfg.continue_task:
+                if cfg.task_id is None:
+                    raise CloneError("--continue requires the original --task-id")
+                clone = clone_path_for(disposable, task_id)
+                if not is_managed_clone(clone):
+                    raise CloneError(f"continuation clone not found or unmanaged: {clone}")
+                meta = WorkerMeta.read(meta_path(clone))
+                if meta.managed_by != MANAGED_BY or meta.task_id != task_id:
+                    raise CloneError("continuation lifecycle identity mismatch")
+                if meta.state != WorkerState.KEEP:
+                    raise CloneError(f"continuation requires retained keep state, got {meta.state}")
+                if meta.source_realpath != source_realpath:
+                    raise CloneError("continuation source does not match retained clone")
+                assert_continuation_usable(
+                    read_continuation(clone),
+                    task_id=task_id,
+                    source_realpath=source_realpath,
+                    clone_realpath=str(clone.resolve()),
+                    base_sha=meta.base_commit,
+                    model=cfg.model,
+                    reasoning_effort=cfg.reasoning_effort,
+                    tool_policy=cfg.tool_policy(),
+                    execution_signature=(cfg.execution or ExecutionContract.empty()).signature(),
+                    mode="research" if cfg.prompt_only else mode,
                 )
+                output_dir = clone / ".grok-output"
+                if output_dir.exists() or output_dir.is_symlink():
+                    safe_rmtree(
+                        output_dir,
+                        disposable_root=clone,
+                        protected=protected,
+                    )
+                for name in ("progress.json", "productive-progress.json"):
+                    path = meta_path(clone).parent / name
+                    if path.exists() or path.is_symlink():
+                        safe_unlink(
+                            path,
+                            disposable_root=meta_path(clone).parent,
+                            protected=protected,
+                        )
+                meta.state = WorkerState.CREATING
+                meta.run_id = run_id
+                meta.dispatcher_id = cfg.dispatcher_id
+                meta.mode = mode
+                meta.backend = cfg.backend
+                meta.timeout_seconds = int(cfg.timeout)
+                meta.keep_reason = None
+                meta.retention_deadline = None
+                meta.artifact_path = None
+                meta.artifact_complete = False
+                meta.exit_code = None
+                meta.result_status = None
+                meta.acpx_exit_code = None
+                meta.error_message = None
+                meta.interrupted = False
+                meta.runner_pid = None
+                meta.runner_start_token = None
+                meta.acpx_pid = None
+                meta.acpx_start_token = None
+                meta.pid = None
+                meta.touch()
+                meta.write(meta_path(clone))
             else:
-                assert source is not None
-                clone, base, src_fp, disclosure = create_workspace(
-                    source,
-                    disposable,
-                    task_id,
-                    include_dirty=cfg.include_dirty,
-                    dirty_allowlist=cfg.include_dirty_paths or None,
-                )
+                # A retained failed clone must not prevent a deliberate retry. Keep
+                # the old evidence and allocate a fresh, returned task id.
+                requested_task_id = task_id
+                while (
+                    clone_path_for(disposable, task_id).exists()
+                    or clone_path_for(disposable, task_id).is_symlink()
+                ):
+                    stem = requested_task_id[:55].rstrip("._-") or "task"
+                    task_id = f"{stem}-{make_task_id()[:6]}"
+                    validate_task_id(task_id)
+
+            if not cfg.continue_task:
+                if cfg.prompt_only:
+                    clone, base, src_fp, disclosure = create_prompt_only_workspace(
+                        disposable, task_id
+                    )
+                else:
+                    assert source is not None
+                    clone, base, src_fp, disclosure = create_workspace(
+                        source,
+                        disposable,
+                        task_id,
+                        include_dirty=cfg.include_dirty,
+                        dirty_allowlist=cfg.include_dirty_paths or None,
+                    )
+            assert clone is not None
             usage = root_usage_bytes(disposable)
             if usage > cfg.cap_bytes:
                 try:
@@ -156,35 +223,34 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                     pass
                 raise CapacityError(usage, cfg.cap_bytes, disposable)
 
-            now = utc_now()
-            disc_dict = disclosure.to_dict()
-            meta = WorkerMeta(
-                schema_version=SCHEMA_VERSION,
-                task_id=task_id,
-                source_realpath=source_realpath,
-                clone_realpath=str(clone.resolve()),
-                state=WorkerState.CREATING,
-                created_at=dt_to_iso(now) or "",
-                updated_at=dt_to_iso(now) or "",
-                managed_by=MANAGED_BY,
-                base_commit=base,
-                source_state_fingerprint=src_fp,
-                timeout_seconds=int(cfg.timeout) if cfg.timeout is not None else None,
-                run_id=run_id,
-                dispatcher_id=cfg.dispatcher_id,
-                mode=mode,
-                backend=cfg.backend,
-                disclosure_summary=disc_dict,
-            )
-            meta.write(meta_path(clone))
+            if not cfg.continue_task:
+                now = utc_now()
+                disc_dict = disclosure.to_dict()
+                meta = WorkerMeta(
+                    schema_version=SCHEMA_VERSION,
+                    task_id=task_id,
+                    source_realpath=source_realpath,
+                    clone_realpath=str(clone.resolve()),
+                    state=WorkerState.CREATING,
+                    created_at=dt_to_iso(now) or "",
+                    updated_at=dt_to_iso(now) or "",
+                    managed_by=MANAGED_BY,
+                    base_commit=base,
+                    source_state_fingerprint=src_fp,
+                    timeout_seconds=int(cfg.timeout) if cfg.timeout is not None else None,
+                    run_id=run_id,
+                    dispatcher_id=cfg.dispatcher_id,
+                    mode=mode,
+                    backend=cfg.backend,
+                    disclosure_summary=disc_dict,
+                )
+                meta.write(meta_path(clone))
 
         assert clone is not None and meta is not None
         # Prompt-only: never prepare deps against a source tree.
         if cfg.prompt_only:
             cfg.prepare_deps = False
-        return execute_worker(
-            cfg, clone, meta, disposable, artifacts, shared, protected, agent
-        )
+        return execute_worker(cfg, clone, meta, disposable, artifacts, shared, protected, agent)
     finally:
         if lease is not None:
             lease.release()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,22 @@ def _health_needs_attention(row: dict[str, Any]) -> bool:
     return process_pid is not None and row.get("process_live") is not True
 
 
+def _with_delivery_latency(event: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(event)
+    timestamp = event.get("emitted_at", event.get("timestamp"))
+    if not isinstance(timestamp, str):
+        return enriched
+    try:
+        emitted = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return enriched
+    if emitted.tzinfo is None:
+        emitted = emitted.replace(tzinfo=UTC)
+    latency = (datetime.now(UTC) - emitted.astimezone(UTC)).total_seconds()
+    enriched["watch_delivery_latency_seconds"] = round(max(0.0, latency), 6)
+    return enriched
+
+
 def watch_workers(
     *,
     shared_cache_root: Path,
@@ -77,12 +94,13 @@ def watch_workers(
         dispatcher_id=dispatcher_id,
     )
     if events:
+        delivered = [_with_delivery_latency(item) for item in events]
         return {
             "kind": "events",
-            "events": events,
-            "count": len(events),
-            "next_cursor": str(events[-1].get("event_id") or after),
-            "attention_required": any(_event_needs_attention(item) for item in events),
+            "events": delivered,
+            "count": len(delivered),
+            "next_cursor": str(delivered[-1].get("event_id") or after),
+            "attention_required": any(_event_needs_attention(item) for item in delivered),
         }
 
     report = collect_health(disposable_root, dispatcher_id=dispatcher_id)

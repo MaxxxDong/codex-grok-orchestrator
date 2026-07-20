@@ -16,5 +16,33 @@
   },
   "iterationPolicy": "Inspect once, then verify every reported finding against a file.",
   "stopWhen": "All public-release surfaces have been checked and a structured result is written.",
-  "pauseIf": "A destructive action, credential, or external publication would be required."
+  "pauseIf": "A destructive action, credential, or external publication would be required.",
+  "execution": {
+    "targetFiles": [
+      "README.md",
+      "pyproject.toml",
+      "src/grok_worker"
+    ],
+    "focusedChecks": [
+      "UV_CACHE_DIR=.uv-cache uv run --no-sync pytest -q tests/test_public_release.py"
+    ],
+    "finalGates": [
+      "UV_CACHE_DIR=.uv-cache uv run --no-sync pytest -q",
+      "UV_CACHE_DIR=.uv-cache uv run --no-sync ruff check src tests",
+      "UV_CACHE_DIR=.uv-cache uv run --no-sync mypy src"
+    ],
+    "riskTags": ["package", "security"],
+    "subtasks": [
+      {
+        "name": "scan-docs",
+        "goal": "Read-only scan of README and docs for personal paths and secrets.",
+        "readonly": true
+      },
+      {
+        "name": "scan-schemas",
+        "goal": "Read-only review of schemas and examples for consistency.",
+        "readonly": true
+      }
+    ]
+  }
 }

@@ -4,6 +4,63 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-20
+
+### Added
+
+- Bounded **execution contract** on task manifests (`execution` / flat aliases):
+  `targetFiles`, `targetModules`, `knownFailureEvidence`, `focusedChecks`,
+  `finalGates`, `riskTags`, named read-only `subtasks` (max 3), and
+  `requiredFailedGates`. Risk tags expand the final verification matrix;
+  previously failed required gates cannot be replaced by a narrower check.
+- **Native same-task continuation**: `--write-continuation` automatically keeps
+  the clone for 24 hours; `--continue` reopens it, and another
+  `--write-continuation` extends the bounded workflow. Metadata lives under
+  `.grok-worker/continuation.json` and reuses `grok --continue` for the same
+  task/source/clone/base/model/reasoning/tool signature. Unrelated tasks stay
+  one-shot. Exact worker-owned Grok session cleanup still runs on finalize/GC
+  when continuation is not retained.
+- Completion events now separate lifecycle `timestamp` from actual `emitted_at`;
+  `watch_delivery_latency_seconds` measures event write to consumer return.
+- Distinct attention reasons in one run are independently observable while exact
+  duplicates remain suppressed.
+- Continuation metadata is now written only after semantic success, and its
+  compatibility hash includes the bounded execution contract.
+- **Task-scoped tool policy** (native flags only): `--disable-web-search`,
+  `--disallowed-tool` (repeatable), `--max-turns`. Effective tool signature is
+  part of continuation compatibility. User plugins/MCP remain available by
+  default.
+- **Native JSON Schema final-result capture**: implementation native runs pass
+  `--json-schema` for WorkerResult; the runner validates model output and
+  atomically writes `.grok-output/result.json`. ACP/legacy still require the
+  model to write `result.json` on disk. Malformed structured output fails
+  closed with a precise error.
+- **Productive-progress detection** distinct from lease liveness: workspace
+  changes, verification logs, result/progress phase. After configurable
+  `--stall-turns` / `--stall-seconds` without productive progress, emit one
+  `attention` event (`no_productive_progress`) without killing the worker.
+- **Stable prompt/cache fingerprinting** with logical workspace id (hash of
+  source realpath) and metrics fields for fresh/cached input, model calls, and
+  duration. Physical clone cwd remains unique; logical shared cwd is **not**
+  applied (Grok sessions key by physical path). Do not claim provider cache
+  hits without A/B evidence.
+- CLI: `--execution-manifest`, `--continue`, `--write-continuation`,
+  `--disable-web-search`, `--disallowed-tool`, `--max-turns`, `--stall-turns`,
+  `--stall-seconds`, `--no-native-json-schema`.
+
+### Changed
+
+- Implement/debug role prompts document native structured-output vs ACP/legacy
+  disk result paths while preserving verification-log and success criteria.
+- Package and public docs bumped to **0.7.0**.
+- Codex watch guidance now consumes the same yielded terminal session until the
+  long-poll exits, preventing the observed multi-minute acknowledgement gap.
+
+### Verification
+
+- Focused contract/native/prompt tests, full pytest suite, Ruff, strict mypy,
+  sdist+wheel build and clean-wheel smoke, `git diff --check`, secret/path scan.
+
 ## [0.6.1] - 2026-07-20
 
 ### Fixed

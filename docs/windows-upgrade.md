@@ -1,9 +1,20 @@
-# Windows / WSL upgrade: 0.3-0.5.3 to 0.6.1
+# Windows / WSL upgrade: 0.3-0.5.3 to 0.7.0
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
+
+## What changes in 0.7.0
+
+- Optional execution contracts on manifests and `--execution-manifest`.
+- Native same-task continuation (`--continue` / `--write-continuation`) with an
+  automatic 24-hour bounded keep; not routed through ACP.
+- Runner-owned native JSON Schema final-result capture; ACP still writes
+  `result.json` on disk.
+- Opt-in `--disable-web-search`, `--disallowed-tool`, `--max-turns`.
+- Productive-progress attention (`--stall-turns` / `--stall-seconds`).
+- Stable prompt fingerprints and honest cache A/B metric fields.
 
 ## What changes in 0.6.1
 
@@ -83,7 +94,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.6.1 --depth 1 \
+git clone --branch v0.7.0 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 
