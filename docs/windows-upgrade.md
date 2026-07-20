@@ -1,9 +1,40 @@
-# Windows native upgrade: 0.3-0.5.3 to 0.6.0
+# Windows native upgrade: 0.3-0.5.3 to 0.7.2
 
 This integration branch supports native Windows 10/11. It does not use WSL as
 the default or as a fallback. The canonical source checkout, installed Windows
 executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
 the only active runtime chain.
+
+## What changes in 0.7.2
+
+- Clean CI no longer depends on a Grok CLI already present in `PATH`.
+- Production runtime behavior is unchanged from 0.7.1.
+
+## What changes in 0.7.1
+
+- Test-only cross-process coordination no longer depends on macOS
+  `multiprocessing` semaphores. Production behavior is unchanged from 0.7.0.
+- Windows/WSL runtime behavior does not otherwise change; this maintenance
+  release keeps all 0.7.0 execution, High-reasoning, cache, and tool defaults.
+
+## What changes in 0.7.0
+
+- Optional execution contracts on manifests and `--execution-manifest`.
+- Native same-task continuation (`--continue` / `--write-continuation`) with an
+  automatic 24-hour bounded keep; not routed through ACP.
+- Runner-owned native JSON Schema final-result capture; ACP still writes
+  `result.json` on disk.
+- Opt-in `--disable-web-search`, `--disallowed-tool`, `--max-turns`.
+- Productive-progress attention (`--stall-turns` / `--stall-seconds`).
+- Stable prompt fingerprints and honest cache A/B metric fields.
+
+## What changes in 0.6.1
+
+- `cache-status --json` and `cache-gc --json` are accepted compatibility flags.
+- Invalid CLI options print a concise Click usage error (no Python/Rich traceback).
+- Metrics persist bounded cache ratios with an explicit basis, optional
+  `model_calls`, and monotonic `process_duration_seconds` for one-shot runs.
+- The stable Worker prompt includes concise execution-efficiency rules.
 
 ## What changes in 0.6.0
 
@@ -73,10 +104,10 @@ the only active runtime chain.
    managed acpx status, and a hash of the Grok config.
 2. Back up the full canonical repository (including `.git` and dirty files) and
    the installed uv tool plus both executables.
-3. Fetch and verify the annotated `v0.6.0` tag and Release.
+3. Fetch and verify the annotated `v0.7.2` tag and Release.
 4. Merge or port the upstream tag into an isolated worktree based on the
    existing Windows-native branch. Do not replace the Windows branch with a
-   plain tag checkout or a second `git clone --branch v0.6.0` installation.
+   plain tag checkout or a second `git clone --branch v0.7.2` installation.
 5. Preserve Win32 file locking, reparse-safe cleanup, PowerShell 7/UTF-8,
    adaptive cmd decoding, hidden child processes, Windows process-tree cleanup,
    managed acpx, configurable worker capacity, and the shared status root.

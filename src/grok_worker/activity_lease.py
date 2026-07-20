@@ -66,9 +66,7 @@ class LeaseState:
             idle_timeout_seconds=idle,
             hard_timeout_seconds=hard,
             started_at=_required_text(data.get("started_at"), "started_at"),
-            last_activity_at=_required_text(
-                data.get("last_activity_at"), "last_activity_at"
-            ),
+            last_activity_at=_required_text(data.get("last_activity_at"), "last_activity_at"),
             last_activity_source=_required_text(
                 data.get("last_activity_source"), "last_activity_source"
             ),
@@ -261,6 +259,7 @@ def run_with_activity_lease(
     poll_seconds: float = LEASE_POLL_SECONDS,
     on_start: Callable[[subprocess.Popen[Any]], None] | None = None,
     on_output: Callable[[str], None] | None = None,
+    on_tick: Callable[[], None] | None = None,
 ) -> LeasedProcessResult:
     """Run one ACP process, renewing its inactivity deadline from real activity."""
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -302,6 +301,8 @@ def run_with_activity_lease(
             on_start(process)
         while True:
             notify_output_growth()
+            if on_tick is not None:
+                on_tick()
             exit_code = process.poll()
             if exit_code is not None:
                 return LeasedProcessResult(int(exit_code))
@@ -325,10 +326,7 @@ def run_with_activity_lease(
                 and hard_elapsed >= state.hard_timeout_seconds
             ):
                 timeout_kind = "hard"
-                message = (
-                    "hard worker limit reached after "
-                    f"{state.hard_timeout_seconds}s"
-                )
+                message = f"hard worker limit reached after {state.hard_timeout_seconds}s"
             if timeout_kind is not None:
                 _append_runner_message(stream, message)
                 terminate_process_tree(process)
@@ -411,8 +409,7 @@ def lease_summary(clone: Path, *, now: datetime | None = None) -> dict[str, obje
             if state.hard_timeout_seconds is None
             else max(
                 0.0,
-                state.hard_timeout_seconds
-                - (clock - _parse_iso(state.started_at)).total_seconds(),
+                state.hard_timeout_seconds - (clock - _parse_iso(state.started_at)).total_seconds(),
             )
         )
     except LeaseError:
@@ -442,9 +439,7 @@ def _session_activity(root: Path, *, now: datetime) -> ActivityObservation | Non
             continue
         for name in ("events.jsonl", "updates.jsonl", "summary.json"):
             observed = _regular_file_activity(session / name, "grok_session", now=now)
-            if observed is not None and (
-                latest is None or observed.observed_at > latest
-            ):
+            if observed is not None and (latest is None or observed.observed_at > latest):
                 latest = observed.observed_at
     return None if latest is None else ActivityObservation(latest, "grok_session")
 

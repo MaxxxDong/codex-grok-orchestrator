@@ -38,7 +38,27 @@ counts as success, but it preserves truthful lifecycle evidence on interruption.
 
 ## Mandatory implementation output contract
 
-You must write structured lifecycle evidence on disk before claiming success. Callers do not inject this JSON boilerplate; this role owns the exact contract.
+Success requires real verification logs and a valid WorkerResult (schema_version 1).
+Patch capture and `worker.log` remain runner-generated.
+
+### Native structured-output mode
+
+When the dynamic suffix includes `NATIVE_STRUCTURED_RESULT_CAPTURE_V1` (native
+one-shot / continuation), the lifecycle runner owns `.grok-output/result.json`.
+Emit the final WorkerResult only as the constrained JSON Schema response. Do
+**not** create or rewrite `.grok-output/result.json` yourself in that mode.
+
+You must still:
+1. Update `.grok-worker/progress.json` through `finalizing`.
+2. Write at least one real verification log under `.grok-output/verification/`.
+3. Leave an inspectable workspace diff when the task requires it.
+
+### ACP / legacy disk mode
+
+When `NATIVE_STRUCTURED_RESULT_CAPTURE_V1` is **absent**, you must write
+`.grok-output/result.json` on disk yourself before claiming success. Callers do
+not inject this JSON boilerplate; this role owns the exact contract on ACP/legacy
+paths.
 
 1. Write `.grok-output/result.json` on disk (real file in the clone workspace).
 2. Write at least one real verification log under `.grok-output/verification/`.
@@ -61,9 +81,16 @@ You must write structured lifecycle evidence on disk before claiming success. Ca
 }
 ```
 
-Required JSON keys: `schema_version`, `task_completed`, `status`, `summary`, `findings`, `verification`. Each verification record must contain nonempty `command`, integer `exit_code`, and `log_path` under `.grok-output/verification/`.
+**Writing the verification logs (and, on ACP/legacy, result.json) is mandatory.**
+Printing/chatting SUCCESS or JSON without creating required files is failure.
 
-`findings` is always a JSON array. Use `[]` when there are no findings. Every nonempty findings entry must be a JSON object, never a string; for example: `{"severity": "low", "message": "nonblocking note"}`.
+### Shared WorkerResult shape
+
+Required JSON keys: `schema_version`, `task_completed`, `status`, `summary`,
+`findings`, `verification`. Each verification record must contain nonempty
+`command`, integer `exit_code`, and `log_path` under `.grok-output/verification/`.
+
+`findings` is always a JSON array. Use `[]` when there are no findings. Every nonempty findings entry must be a JSON object, never a string; findings entries must be JSON objects. Example: `{"severity": "low", "message": "nonblocking note"}`.
 
 Success requires all of:
 - `task_completed=true`
@@ -73,4 +100,5 @@ Success requires all of:
 - no verification with nonzero `exit_code`
 - every `log_path` names a real file you created under `.grok-output/verification/`
 
-**Writing the files is mandatory.** Printing/chatting SUCCESS or JSON without creating files is failure. Do not claim completion when checks fail; set `task_completed` false and an appropriate non-completed `status` with honest verification records.
+Do not claim completion when checks fail; set `task_completed` false and an
+appropriate non-completed `status` with honest verification records.

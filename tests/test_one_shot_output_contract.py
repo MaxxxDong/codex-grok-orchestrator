@@ -52,12 +52,14 @@ def _assert_implementation_contract(prompt: str) -> None:
     lower = prompt.lower()
     write_rules = (
         "without creating files is failure",
+        "without creating required files is failure",
         "chat-only",
         "printing/chatting",
         "printing or chatting",
         "do not merely print",
         "write-not-print",
         "writing the files is mandatory",
+        "writing the verification logs",
         "not sufficient to print",
         "not merely print",
     )
@@ -79,6 +81,9 @@ def _assert_implementation_contract(prompt: str) -> None:
     assert 'status": "partial"' in lower or 'status: "partial"' in lower
     assert "atomic" in lower and ("rename" in lower or "replace" in lower)
     assert "before extensive" in lower or "before editing" in lower
+    # 0.7: native structured-output path vs ACP/legacy disk path
+    assert "NATIVE_STRUCTURED_RESULT_CAPTURE" in prompt or "native structured-output" in lower
+    assert "acp" in lower or "legacy" in lower
 
 
 def test_one_shot_implementation_prompt_includes_base_role_and_output_contract() -> None:
@@ -98,6 +103,21 @@ def test_stable_prompt_forbids_disposable_paths_in_project_artifacts() -> None:
     assert ".grok-worker/lifecycle.json" in prompt
     assert "source_realpath" in prompt
     assert "Never write the disposable clone path" in prompt
+
+
+def test_stable_prompt_includes_execution_efficiency_rules() -> None:
+    from grok_worker.prompt_cache import build_one_shot_prompt
+
+    prompt = build_one_shot_prompt(SKILL_ROOT, "implementation", TASK_IMPL)
+    lower = prompt.lower()
+    assert "execution efficiency" in lower
+    assert "targeted" in lower or "targeted reads" in lower
+    assert "smallest relevant" in lower
+    assert "full suite" in lower
+    assert "clone-local" in lower or "clone-local `.venv`" in prompt
+    assert "never create a clone-local" in lower or "never create a" in lower
+    assert "subagents" in lower
+    assert "independent" in lower
 
 
 def test_debug_role_prompt_defines_findings_object_shape() -> None:

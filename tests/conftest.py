@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -44,6 +46,29 @@ def init_git_repo(path: Path, *, filename: str = "README.md", content: str = "he
 def git_source(tmp_roots: dict[str, Path]) -> Path:
     init_git_repo(tmp_roots["source"])
     return tmp_roots["source"]
+
+
+@pytest.fixture
+def short_tmp_roots() -> Iterator[dict[str, Path]]:
+    """Use a shallow root for tests whose URL-encoded Windows session path matters."""
+    with tempfile.TemporaryDirectory(prefix="gw-test-") as raw_root:
+        root = Path(raw_root)
+        roots = {
+            "source": root / "s",
+            "disposable": root / "d",
+            "artifacts": root / "a",
+            "shared": root / "c",
+            "root": root,
+        }
+        for path in roots.values():
+            path.mkdir(parents=True, exist_ok=True)
+        yield roots
+
+
+@pytest.fixture
+def short_git_source(short_tmp_roots: dict[str, Path]) -> Path:
+    init_git_repo(short_tmp_roots["source"])
+    return short_tmp_roots["source"]
 
 
 @pytest.fixture

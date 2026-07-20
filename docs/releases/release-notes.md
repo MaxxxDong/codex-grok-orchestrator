@@ -1,9 +1,110 @@
+## 2026-07-20 — Efficiency, continuation, and native structured results / 提效、续跑与原生结构化结果
+
+**Version:** `grok-worker` 0.7.0
+
+Bounded execution contracts let Root pass targets, failure evidence, focused
+checks, final gates, and risk tags without polluting the stable prompt prefix.
+Native same-task continuation reuses `grok --continue` under an explicit
+compatibility contract (task, source, clone, base SHA, model, High reasoning,
+tool signature, prompt version, contract hash) with TTL and exact session cleanup
+when not retained. Native implementation runs use Grok `--json-schema` so the
+lifecycle runner—not the model—atomically persists `.grok-output/result.json`.
+ACP/legacy paths keep the disk write contract. Opt-in tool policy, productive-
+progress attention, and prompt fingerprints with honest cache A/B metrics complete
+the efficiency surface. Provider cache hits are never claimed without A/B evidence;
+logical shared cwd is not applied because Grok sessions key by physical path.
+
+有界执行契约、原生同任务续跑、runner 落盘 JSON Schema 结果、可选工具策略、有效
+进展告警与稳定提示指纹。不把未证明的 provider 缓存命中写进文档；物理 clone 仍唯一。
+
+Release verification: full pytest, Ruff, mypy, sdist+wheel smoke, path/secret scan.
+
+---
+
 # Release notes / 发布说明
 
 Canonical public release history for **codex-grok-orchestrator**.
 The installable package and CLI remain **`grok-worker`**.
 
 Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
+
+---
+
+## 2026-07-20 — Clean CI binary isolation / 干净 CI 二进制隔离
+
+**Version:** `grok-worker` 0.7.2
+
+The native-command construction test now explicitly injects its fake Grok
+binary instead of depending on the developer machine's `PATH`. This closes the
+GitHub Actions failure on clean Ubuntu and macOS runners. Production Grok binary
+discovery and all 0.7.1 runtime behavior are unchanged.
+
+原生命令构造测试现在显式注入测试用 Grok 二进制名，不再依赖开发机 `PATH`。这修复
+干净 Ubuntu/macOS GitHub runner 上的失败；生产 Grok 二进制发现和 0.7.1 运行行为不变。
+
+Release verification: full GitHub Actions matrix on Ubuntu and macOS with
+Python 3.12 and 3.13, plus release build and payload checks.
+
+---
+
+## 2026-07-20 — Sandbox-portable concurrency tests / 沙箱兼容并发测试
+
+**Version:** `grok-worker` 0.7.1
+
+Five concurrency regressions previously used Python `multiprocessing` barriers
+and events. Grok Build's macOS sandbox rejects the underlying named semaphore
+creation before the production locks are exercised, producing deterministic
+`_multiprocessing.SemLock` permission failures. Version 0.7.1 replaces only that
+test harness with independent Python subprocesses coordinated by plain ready/go
+files. The same POSIX file locks, cache leases, dispatcher capacity,
+same-source exclusion, and process-exit release behavior remain under test.
+
+五个并发回归测试此前依赖 Python `multiprocessing` 屏障与事件，Grok Build 的 macOS
+沙箱会在真正测试生产锁之前拒绝底层命名信号量。0.7.1 仅将测试协调层替换为独立 Python
+子进程和普通 ready/go 文件；生产锁、缓存租约、并发容量、同源互斥和进程退出释放语义不变。
+
+Release verification: host focused suite `25 passed`, full suite `292 passed`,
+Ruff and strict mypy; Grok Build macOS sandbox focused suite `25 passed in 2.69s`
+with no `SemLock`, `PermissionError`, or repository changes.
+
+---
+
+## 2026-07-20 — CLI compatibility, honest cache metrics / CLI 兼容与诚实缓存指标
+
+**Version:** `grok-worker` 0.6.1
+
+Maintenance release: `cache-status --json` and `cache-gc --json` are accepted
+compatibility flags without changing the single-JSON output. Invalid CLI options
+now surface Click's concise usage error instead of a Python/Rich traceback when
+the entry point runs with `standalone_mode=False`.
+
+Token metrics distinguish Grok separate cache-read input from OpenAI nested
+cached tokens, persist a bounded `cache_ratio` with a machine-readable basis
+(or null for incoherent totals),
+and optionally record `model_calls` from `num_turns` / `modelCalls`. One-shot
+runs also record monotonic `process_duration_seconds`. The stable Worker prompt
+adds concise execution-efficiency rules (targeted inspection, smallest checks
+while iterating, full suite once at the end when required, no clone-local
+environments, limited independent subagents).
+
+维护发布：`cache-status --json` 与 `cache-gc --json` 作为兼容标志被接受，输出
+仍是单一 JSON。入口在 `standalone_mode=False` 下对非法选项返回 Click 简洁用法
+错误，而不再抛出 Python/Rich 堆栈。
+
+Token 指标区分 Grok 独立 cache-read 与 OpenAI 嵌套 cached tokens，持久化有界
+`cache_ratio` 与 basis，并可选记录 `model_calls`。一次性运行额外记录单调时钟
+`process_duration_seconds`。稳定 Worker 提示补充执行效率规则。
+
+The repository README and GitHub Pages landing page now include a bilingual
+version-evolution summary from 0.3.0 through 0.6.1. This page remains the
+canonical detailed history instead of duplicating full release notes on every
+surface.
+
+仓库 README 与 GitHub Pages 首页新增 0.3.0 至 0.6.1 的双语版本演进摘要；本文件
+继续作为详细发布历史的唯一权威来源，避免在多个页面重复维护完整说明。
+
+Release verification: focused CLI/metrics/prompt tests, full pytest suite, Ruff,
+strict mypy, and clean wheel build/install smoke.
 
 ---
 

@@ -8,10 +8,13 @@ from pathlib import Path
 
 from grok_worker.artifacts import (
     artifact_authorizes_clone_deletion,
+    artifact_intends_clone_deletion,
     artifacts_complete_and_verified,
 )
 from grok_worker.completion_events import emit_completion_event
 from grok_worker.constants import DEFAULT_FAILURE_RETAIN_HOURS
+from grok_worker.continuation import continuation_path
+from grok_worker.grok_state import cleanup_clone_session_state, clone_session_root
 from grok_worker.locks import root_lock, worker_lock
 from grok_worker.models import (
     WorkerMeta,
@@ -47,6 +50,17 @@ def _deadline_expired(meta: WorkerMeta, now: datetime) -> bool:
     if dl.tzinfo is None:
         dl = dl.replace(tzinfo=UTC)
     return now >= dl
+
+
+def _expired_continuation(meta: WorkerMeta, clone: Path, now: datetime) -> bool:
+    continuation = continuation_path(clone)
+    return bool(
+        meta.state == WorkerState.KEEP
+        and meta.retention_deadline
+        and continuation.is_file()
+        and not continuation.is_symlink()
+        and _deadline_expired(meta, now)
+    )
 
 
 def _worker_lock_held(clone: Path) -> bool:
@@ -152,6 +166,14 @@ def should_delete(
     if is_active(meta, clone) or meta.state == WorkerState.FINALIZING:
         return False
     if meta.state == WorkerState.KEEP or meta.keep_reason:
+        if _expired_continuation(meta, clone, now):
+            return (
+                bool(meta.artifact_complete)
+                and artifacts_complete_and_verified(
+                    meta.artifact_path, clone=clone, disposable_root=disposable_root
+                )
+                and artifact_intends_clone_deletion(Path(meta.artifact_path or ""))
+            )
         return False
     if meta.state == WorkerState.SUCCESS:
         if not meta.artifact_complete:
@@ -271,6 +293,13 @@ def _gc_scan(
 
         if should_delete(meta, child, now, disposable_root=root):
             try:
+                if _expired_continuation(meta, child, now):
+                    cleanup_clone_session_state(child)
+                    session_root = clone_session_root(child)
+                    if session_root.exists() or session_root.is_symlink():
+                        raise SafetyError(
+                            f"retained Grok session cleanup incomplete: {session_root}"
+                        )
                 safe_rmtree(child, disposable_root=root, protected=prot)
                 report.removed.append(child.name)
             except (SafetyError, OSError) as exc:

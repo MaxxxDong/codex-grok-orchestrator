@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from grok_worker.gc import gc_disposable_root
+from grok_worker.grok_state import clone_session_root
+from grok_worker.models import WorkerMeta, dt_to_iso, utc_now
+from grok_worker.paths import meta_path
 from grok_worker.runner import RunConfig, run_worker
 
 
@@ -67,11 +72,6 @@ def _fake_grok(
             "if exist \"!cwd!\\.mcp.json\" set \"mcp_state=present\"\r\n"
             "mkdir \"!cwd!\\.grok-output\\verification\" 2>nul\r\n"
             "> \"!cwd!\\.grok-output\\verification\\verify.log\" echo verification passed\r\n"
-            "> \"!cwd!\\.grok-output\\result.json\" echo {\"schema_version\":1,"
-            "\"task_completed\":true,\"status\":\"completed\","
-            "\"summary\":\"native ok\",\"findings\":[],\"verification\":[{"
-            "\"command\":\"fake verify\",\"exit_code\":0,"
-            "\"log_path\":\".grok-output/verification/verify.log\"}]}\r\n"
             "> \"!cwd!\\.grok-output\\native-env.txt\" (\r\n"
             "  echo %HOME%\r\n"
             "  if defined GROK_HOME (echo %GROK_HOME%) else (echo unset)\r\n"
@@ -80,9 +80,12 @@ def _fake_grok(
             "  echo %GROK_SHARED_VENV_ROOT%\r\n"
             "  echo !mcp_state!\r\n"
             ")\r\n"
-            "echo {\"text\":\"native ok\",\"thought\":\"checked\","
+            "echo {\"schema_version\":1,\"task_completed\":true,"
+            "\"status\":\"completed\",\"summary\":\"native ok\","
+            "\"findings\":[],\"verification\":[{\"command\":\"fake verify\","
+            "\"exit_code\":0,\"log_path\":\".grok-output/verification/verify.log\"}],"
             "\"usage\":{\"input_tokens\":4096,\"cache_read_input_tokens\":2048,"
-            "\"output_tokens\":128,\"reasoning_tokens\":77}}\r\n"
+            "\"output_tokens\":128,\"reasoning_tokens\":77,\"num_turns\":3}}\r\n"
             + warning,
             encoding="utf-8",
         )
@@ -115,26 +118,16 @@ mcp_state=absent
 if [ -e "$cwd/.mcp.json" ]; then mcp_state=present; fi
 mkdir -p "$cwd/.grok-output/verification"
 printf 'verification passed\n' > "$cwd/.grok-output/verification/verify.log"
-cat > "$cwd/.grok-output/result.json" <<'JSON'
-{
-  "schema_version": 1,
-  "task_completed": true,
-  "status": "completed",
-  "summary": "native ok",
-  "findings": [],
-  "verification": [{
-    "command": "fake verify",
-    "exit_code": 0,
-    "log_path": ".grok-output/verification/verify.log"
-  }]
-}
-JSON
+# 0.7: runner owns result.json via --json-schema capture; model emits WorkerResult JSON.
 printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   "$HOME" "${GROK_HOME-unset}" "$args" "$UV_CACHE_DIR" "$GROK_SHARED_VENV_ROOT" "$mcp_state" \
   > "$cwd/.grok-output/native-env.txt"
-printf '%s%s\n' \
-  '{"text":"native ok","thought":"checked","usage":{"input_tokens":4096,' \
-  '"cache_read_input_tokens":2048,"output_tokens":128,"reasoning_tokens":77}}'
+printf '%s\n' \
+  '{"schema_version":1,"task_completed":true,"status":"completed",'\
+'"summary":"native ok","findings":[],"verification":[{"command":"fake verify",'\
+'"exit_code":0,"log_path":".grok-output/verification/verify.log"}],'\
+'"usage":{"input_tokens":4096,"cache_read_input_tokens":2048,'\
+'"output_tokens":128,"reasoning_tokens":77,"num_turns":3}}'
 """
         + warning,
         encoding="utf-8",
@@ -301,3 +294,192 @@ def test_retained_task_id_collision_allocates_fresh_clone(
     assert first.task_id == "same-task"
     assert second.task_id.startswith("same-task-")
     assert first.clone_path != second.clone_path
+
+
+def test_native_continuation_reuses_clone_then_closes_cleanly(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    common = dict(
+        source=git_source,
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        backend="native",
+        prepare_deps=False,
+        task_id="native-continue",
+        skip_post_gc=True,
+    )
+
+    first = run_worker(
+        RunConfig(
+            **common,
+            prompt="make the first bounded change",
+            keep_reason="native continuation (TTL-bounded)",
+            write_continuation=True,
+            run_id="native-turn-one",
+        )
+    )
+    assert first.state == "keep"
+    clone = Path(first.clone_path or "")
+    assert clone.is_dir()
+    lifecycle = json.loads((clone / ".grok-worker/lifecycle.json").read_text(encoding="utf-8"))
+    assert lifecycle["retention_deadline"] is not None
+    assert (clone / ".grok-worker/continuation.json").is_file()
+
+    second = run_worker(
+        RunConfig(
+            **common,
+            prompt="finish the same task",
+            continue_task=True,
+            run_id="native-turn-two",
+        )
+    )
+    assert second.state == "success"
+    assert second.clone_path is None
+    assert not clone.exists()
+    assert Path(first.artifact_path or "").is_dir()
+    assert Path(second.artifact_path or "").is_dir()
+    assert first.artifact_path != second.artifact_path
+    receipt = json.loads(
+        (Path(second.artifact_path or "") / "verification.txt").read_text(encoding="utf-8")
+    )
+    assert receipt["metrics"][-1]["continue_session"] is True
+
+
+def test_expired_native_continuation_is_garbage_collected(
+    short_git_source: Path,
+    short_tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    git_source = short_git_source
+    tmp_roots = short_tmp_roots
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="retain briefly",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-expire",
+            keep_reason="native continuation (TTL-bounded)",
+            write_continuation=True,
+            skip_post_gc=True,
+        )
+    )
+    clone = Path(outcome.clone_path or "")
+    worker = json.loads(
+        (Path(outcome.artifact_path or "") / "worker.log").read_text(encoding="utf-8")
+    )
+    assert worker["session"]["closed"] is False
+    assert worker["session"]["retained"] is True
+    session_root = clone_session_root(clone)
+    session_root.mkdir(parents=True, exist_ok=True)
+    (session_root / "session.json").write_text("{}\n", encoding="utf-8")
+    meta = WorkerMeta.read(meta_path(clone))
+    meta.retention_deadline = dt_to_iso(utc_now() - timedelta(seconds=1))
+    meta.write(meta_path(clone))
+
+    report = gc_disposable_root(
+        tmp_roots["disposable"],
+        protected=[git_source, tmp_roots["artifacts"], tmp_roots["shared"]],
+        shared_cache_root=tmp_roots["shared"],
+    )
+    assert clone.name in report.removed
+    assert not clone.exists()
+    assert not session_root.exists()
+
+
+def test_prompt_only_native_continuation_uses_research_contract(
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    common = dict(
+        source=None,
+        prompt_only=True,
+        mode="research",
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        backend="native",
+        prepare_deps=False,
+        task_id="prompt-only-continue",
+        skip_post_gc=True,
+    )
+    first = run_worker(
+        RunConfig(
+            **common,
+            prompt="first research turn",
+            keep_reason="native continuation (TTL-bounded)",
+            write_continuation=True,
+        )
+    )
+    assert first.state == "keep"
+    clone = Path(first.clone_path or "")
+    second = run_worker(
+        RunConfig(
+            **common,
+            prompt="finish research",
+            continue_task=True,
+        )
+    )
+    assert second.state == "success"
+    assert not clone.exists()
+
+
+def test_semantic_failure_does_not_create_kept_continuation(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    fake.write_text(
+        fake.read_text(encoding="utf-8").replace(
+            '"task_completed":true,"status":"completed"',
+            '"task_completed":false,"status":"partial"',
+        ),
+        encoding="utf-8",
+    )
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="partial result",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-partial-continuation",
+            keep_reason="native continuation (TTL-bounded)",
+            write_continuation=True,
+            skip_post_gc=True,
+        )
+    )
+    clone = Path(outcome.clone_path or "")
+    assert outcome.state == "failed"
+    assert clone.is_dir()
+    assert not (clone / ".grok-worker/continuation.json").exists()
+    lifecycle = WorkerMeta.read(meta_path(clone))
+    assert lifecycle.retention_deadline is not None

@@ -28,6 +28,7 @@ _ALLOWED_EVENT_KEYS = frozenset(
         "task_id",
         "state",
         "timestamp",
+        "emitted_at",
         "artifact_path",
         "run_id",
         "dispatcher_id",
@@ -36,6 +37,7 @@ _ALLOWED_EVENT_KEYS = frozenset(
         "artifact_ready",
         "clone_cleaned",
         "session_cleaned",
+        "session_retained",
         "attention_required",
         "reason_code",
     }
@@ -44,11 +46,18 @@ _ALLOWED_EVENT_KEYS = frozenset(
 # Required pointer fields with accepted types (artifact_path may be null).
 # Extended fields are optional for backward-compatible reads of old rows.
 _REQUIRED_STRING_KEYS = ("event_id", "task_id", "state", "timestamp")
-_OPTIONAL_STRING_KEYS = ("run_id", "dispatcher_id", "kind", "reason_code")
+_OPTIONAL_STRING_KEYS = (
+    "run_id",
+    "dispatcher_id",
+    "kind",
+    "reason_code",
+    "emitted_at",
+)
 _OPTIONAL_BOOL_KEYS = (
     "artifact_ready",
     "clone_cleaned",
     "session_cleaned",
+    "session_retained",
     "attention_required",
 )
 
@@ -158,20 +167,29 @@ def _event_kind(event: dict[str, Any]) -> str:
 
 
 def _has_run_state_kind(
-    events: list[dict[str, Any]], run_id: str, state: str, kind: str
+    events: list[dict[str, Any]],
+    run_id: str,
+    state: str,
+    kind: str,
+    reason_code: str | None = None,
 ) -> bool:
     for event in events:
         if (
             event.get("run_id") == run_id
             and event.get("state") == state
             and _event_kind(event) == kind
+            and (kind != "attention" or event.get("reason_code") == reason_code)
         ):
             return True
     return False
 
 
 def _has_task_state_kind_legacy(
-    events: list[dict[str, Any]], task_id: str, state: str, kind: str
+    events: list[dict[str, Any]],
+    task_id: str,
+    state: str,
+    kind: str,
+    reason_code: str | None = None,
 ) -> bool:
     """Legacy dedup when run_id is absent: (task_id, state, kind)."""
     for event in events:
@@ -181,6 +199,7 @@ def _has_task_state_kind_legacy(
             event.get("task_id") == task_id
             and event.get("state") == state
             and _event_kind(event) == kind
+            and (kind != "attention" or event.get("reason_code") == reason_code)
         ):
             return True
     return False
@@ -200,6 +219,7 @@ def emit_completion_event(
     artifact_ready: bool | None = None,
     clone_cleaned: bool | None = None,
     session_cleaned: bool | None = None,
+    session_retained: bool | None = None,
     attention_required: bool | None = None,
     reason_code: str | None = None,
 ) -> dict[str, Any] | None:
@@ -221,12 +241,14 @@ def emit_completion_event(
         shared = _resolve_shared(shared_cache_root)
         log_path = completion_events_path(shared)
         lock = FileLock(completion_events_lock_path(shared))
-        ts = timestamp or (dt_to_iso(utc_now()) or "")
+        emitted_at = dt_to_iso(utc_now()) or ""
+        ts = timestamp or emitted_at
         event: dict[str, Any] = {
             "event_id": str(uuid.uuid4()),
             "task_id": str(task_id),
             "state": str(state),
             "timestamp": ts,
+            "emitted_at": emitted_at,
             "artifact_path": artifact_path,
             "kind": str(kind),
         }
@@ -242,6 +264,8 @@ def emit_completion_event(
             event["clone_cleaned"] = clone_cleaned
         if session_cleaned is not None:
             event["session_cleaned"] = session_cleaned
+        if session_retained is not None:
+            event["session_retained"] = session_retained
         if attention_required is not None:
             event["attention_required"] = attention_required
         if reason_code:
@@ -253,10 +277,20 @@ def emit_completion_event(
         with lock:
             existing = _read_events_unlocked(log_path)
             if run_id:
-                if _has_run_state_kind(existing, str(run_id), str(state), str(kind)):
+                if _has_run_state_kind(
+                    existing,
+                    str(run_id),
+                    str(state),
+                    str(kind),
+                    reason_code,
+                ):
                     return None
             elif _has_task_state_kind_legacy(
-                existing, str(task_id), str(state), str(kind)
+                existing,
+                str(task_id),
+                str(state),
+                str(kind),
+                reason_code,
             ):
                 return None
             log_path.parent.mkdir(parents=True, exist_ok=True)

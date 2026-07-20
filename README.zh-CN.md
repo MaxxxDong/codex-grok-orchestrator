@@ -11,3 +11,11 @@
 Python 包与 CLI 名称仍为 **`grok-worker`**。公共仓库身份为 **`codex-grok-orchestrator`**。
 
 Worker 的标准外部证据由 `changes.patch`、`worker.log` 和 `verification.txt` 三个文件组成。
+
+0.7.2 修复干净 CI 对本机已安装 Grok CLI 的隐式依赖，生产二进制发现行为不变。0.7.1
+将测试专用的 multiprocessing semaphore 换为真实子进程和普通文件屏障，使并发锁
+测试可在 Grok macOS 沙箱中运行；生产锁、缓存、High 和工具默认均不变。0.7.0 默认使用
+Grok Build 原生 Headless + JSON Schema 收口结果，并加入精确任务合同、
+24 小时有界同任务续跑、任务级工具裁剪、有效进展告警和缓存 A/B 指标。分离运行后应阻塞等待
+同一个 `grok-worker watch` 终端会话；若终端工具返回 `session_id`，只需继续该会话一次，
+不要丢下内层 watch 后改成五分钟轮询。

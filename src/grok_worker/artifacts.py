@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 from grok_worker.artifact_contract import (
     ContractError,
     clone_deletion_authorized,
+    clone_deletion_intended,
     write_artifact_contract,
 )
 from grok_worker.artifact_contract import (
@@ -51,6 +53,13 @@ def verify_artifact_contract(root: Path) -> None:
 def artifact_authorizes_clone_deletion(root: Path) -> bool:
     try:
         return clone_deletion_authorized(root)
+    except ContractError:
+        return False
+
+
+def artifact_intends_clone_deletion(root: Path) -> bool:
+    try:
+        return clone_deletion_intended(root)
     except ContractError:
         return False
 
@@ -136,8 +145,13 @@ def collect_artifacts(
     """Atomically publish an exact three-file artifact directory outside the clone."""
     if not meta.base_commit:
         raise ArtifactError("base_commit required for artifact collection")
-    final = artifact_root / meta.task_id
-    staging = artifact_root / f"{STAGING_PREFIX}{meta.task_id}"
+    artifact_name = meta.task_id
+    first = artifact_root / artifact_name
+    if (first.exists() or first.is_symlink()) and meta.run_id:
+        run_suffix = hashlib.sha256(meta.run_id.encode()).hexdigest()[:12]
+        artifact_name = f"{meta.task_id[:51].rstrip('._-')}-{run_suffix}"
+    final = artifact_root / artifact_name
+    staging = artifact_root / f"{STAGING_PREFIX}{artifact_name}"
     if disposable_root is not None:
         for label, path in (("final", final), ("staging", staging)):
             if not artifact_outside_clone(path, clone, disposable_root):

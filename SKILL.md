@@ -91,8 +91,15 @@ Use `run` for one bounded turn.
 file tools are verified with Grok Build 0.2.106. Managed `--backend acp` remains
 available for compatibility and continues to power named sessions.
 
-Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous iteration.
-Named sessions remain ACP-backed in v0.5.
+Prefer **native same-task continuation** (`run --write-continuation`, then
+`run --continue`) when the same logical one-shot task needs another native turn
+without ACP. Compatibility requires identical task ID, source realpath, clone,
+base SHA, model, High reasoning, tool signature, prompt version, and contract
+hash (including the bounded execution contract). TTL expires unused continuation metadata; finalize/GC without retained
+continuation cleans the exact worker-owned Grok session.
+
+Use `session-start` → zero or more `session-followup` → `session-finalize` only when the same logical task needs continuous **ACP** iteration.
+Named sessions remain ACP-backed.
 
 A named session may be reused only when all of these remain identical:
 
@@ -108,7 +115,8 @@ A new task, audit/review role, repository/cwd, base, permission, model, or MCP c
 
 ## Task manifest
 
-Named sessions require a JSON manifest conforming to `schemas/task-manifest.schema.json`:
+Named sessions require a JSON manifest conforming to `schemas/task-manifest.schema.json`.
+Optional `execution` (or flat aliases) is the dynamic bounded run contract:
 
 ```json
 {
@@ -122,11 +130,22 @@ Named sessions require a JSON manifest conforming to `schemas/task-manifest.sche
   },
   "iterationPolicy": "Continue only this logical task",
   "stopWhen": "Acceptance checks pass",
-  "pauseIf": "A user decision or scope expansion is required"
+  "pauseIf": "A user decision or scope expansion is required",
+  "execution": {
+    "targetFiles": ["src/pkg/module.py"],
+    "focusedChecks": ["pytest -q tests/test_module.py"],
+    "finalGates": ["pytest -q", "ruff check src tests", "mypy src"],
+    "riskTags": ["package"],
+    "subtasks": [
+      {"name": "scan-tests", "goal": "Read-only inventory of failing tests", "readonly": true}
+    ]
+  }
 }
 ```
 
-The stable prompt prefix is versioned base instructions + role instructions + a content-addressed context pack + a fixed delimiter. The task manifest is the dynamic suffix. Follow-ups send only the dynamic suffix.
+The stable prompt prefix is versioned base instructions + role instructions + a content-addressed context pack + a fixed delimiter. The task manifest and execution contract are the dynamic suffix. Follow-ups send only the dynamic suffix. Never put run IDs, disposable absolute paths, or timestamps in the stable prefix.
+
+Risk tags expand the final verification matrix. Never replace a previously failed required gate with a narrower focused check. Shared API/schema/security/cache/concurrency/build/migration/package changes must expand final gates.
 
 ## Commands
 
@@ -149,7 +168,32 @@ grok-worker run \
   --disposable-root "$DISPOSABLE_ROOT" \
   --artifact-root "$ARTIFACT_ROOT" \
   --mode implementation \
-  --prompt-file "$PROMPT_FILE"
+  --prompt-file "$PROMPT_FILE" \
+  --execution-manifest "$TASK_JSON"
+```
+
+Native same-task continuation (not ACP):
+
+```bash
+# Turn 1: retain clone + continuation metadata
+grok-worker run \
+  --source "$REPO" --backend native --mode implementation \
+  --task-id "$TASK_ID" --prompt-file "$PROMPT_FILE" \
+  --write-continuation \
+  --dispatcher-id "$GROK_WORKER_DISPATCHER_ID"
+
+# Turn 2+: same task/source/clone/model/tools
+grok-worker run \
+  --source "$REPO" --backend native --mode implementation \
+  --task-id "$TASK_ID" --prompt-file "$FOLLOWUP_FILE" \
+  --continue --write-continuation \
+  --dispatcher-id "$GROK_WORKER_DISPATCHER_ID"
+
+# Final without --write-continuation: normal finalize + session GC
+grok-worker run \
+  --source "$REPO" --backend native --mode implementation \
+  --task-id "$TASK_ID" --prompt-file "$FINAL_FILE" \
+  --continue --dispatcher-id "$GROK_WORKER_DISPATCHER_ID"
 ```
 
 One-shot read-only analysis/review:
@@ -236,7 +280,12 @@ grok-worker list-legacy --disposable-root "$DISPOSABLE_ROOT"
 
 The start receipt is launch acceptance, not task success. After it returns, call
 `watch` with the receipt's `run_id`; carry `next_cursor` into each subsequent
-call. A 300-second heartbeat is the only routine fallback. For parallel work,
+call. If the Codex terminal tool yields a `session_id` while that `watch` process
+is still running, resume that exact terminal session with a blocking empty
+`write_stdin`/wait until the command exits. Tool-level yields may require another
+wait on the same session; that is continuation of one long-poll, not status polling;
+never wait only on an outer orchestration cell and abandon the inner terminal
+session. A 300-second heartbeat is the only routine fallback. For parallel work,
 use one dispatcher-scoped watch for the whole wave rather than one terminal or
 watcher per Worker.
 
@@ -245,7 +294,12 @@ fields, config-apply rollback semantics, and authority boundaries.
 
 Optional one-shot controls:
 
-- `--backend native|acp`: native is the one-shot default; ACP is the compatibility and named-session transport.
+- `--backend native|acp`: native is the one-shot default; ACP is the compatibility and named-session transport and requires `acpx`.
+- `--execution-manifest PATH`: bounded targets/checks/risk tags/subtasks (dynamic suffix).
+- `--continue` / `--write-continuation`: native same-task continuation. The writer automatically keeps the clone with a 24-hour TTL; final `--continue` without another writer flag closes and cleans it.
+- `--disable-web-search`, `--disallowed-tool NAME` (repeatable), `--max-turns N`: opt-in pure-code tool policy via native Grok flags (plugins/MCP stay available by default).
+- `--stall-turns N`, `--stall-seconds S`: productive-progress attention thresholds (never kill solely for stall).
+- `--no-native-json-schema`: disable runner-owned JSON Schema result capture (ACP-like disk `result.json`).
 - `--keep "REASON"`: explicit indefinite clone retention.
 - Safe staged, unstaged, and untracked files are snapshotted automatically.
   Ignored files are never copied. Sensitive paths/content and escaping symlinks
@@ -316,12 +370,17 @@ Dead creating/running/finalizing processes become failed with a new 24-hour dead
 
 A successful implementation requires backend exit 0 and a strict
 `.grok-output/result.json` with `task_completed=true`, `status=completed`, and at
-least one passing verification record. Analysis runs are permissioned read-only;
+least one passing verification record. On **native** implementation runs the
+runner captures the model’s JSON Schema final object and atomically writes
+`result.json` itself; the model must still create real verification logs under
+`.grok-output/verification/`. **ACP/legacy** paths still require the model to
+write `result.json` on disk. Analysis runs are permissioned read-only;
 when the backend exits 0 with a nonempty response but cannot write
 `.grok-output`, the lifecycle runner creates a clearly identified root-owned
 analysis result and retains the response in `worker.log`. Analysis may have an
 empty verification list. Missing/empty analysis output, partial/failed results,
-reasoning downgrade, and unverifiable implementation results are failures.
+malformed structured output, reasoning downgrade, and unverifiable
+implementation results are failures.
 
 ### Lifecycle / observability
 
@@ -339,7 +398,11 @@ reasoning downgrade, and unverifiable implementation results are failures.
   replaces per-worker status polling.
 - **Codex tool-use rule**: launch one-shots with `run --detach`, then make one
   bounded `watch --wait-seconds 300` call at a time. Never keep the launch shell
-  alive for 10/30-second `write_stdin` checks. A watcher returning early means a
+  alive for 10/30-second `write_stdin` checks. When the terminal tool yields a
+  live `session_id` for the blocking watch, continue that same session with an
+  empty blocking `write_stdin`/wait until it exits; abandoning it loses the
+  immediate wakeup. Repeated tool-level yields on that same process are not
+  health polling. A watcher returning early means a
   real event arrived; an unchanged heartbeat does not justify reading full logs.
 - **Handoff rule**: on `terminal/success`, inspect the artifact and then watch
   from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
@@ -410,10 +473,15 @@ Only delete a successful clone when:
 Write per-run metrics to `metrics/worker-runs.jsonl`. Native JSON output exposes
 input, cached-read, output, and reasoning tokens when Grok reports them. A cache
 ratio is observable only when provider output contains both input-token and
-cached-read-token values. The native profile and named-session reuse preserve
-cache eligibility, but different disposable clone paths change Grok's cwd context
-and may miss across one-shot runs. Relay thresholds and eviction can also make
-identical calls miss. Report unobservable metrics as unobservable.
+cached-read-token values. Metrics also record `model_calls`,
+`process_duration_seconds`, `prompt_fingerprint` (stable prefix hash + logical
+workspace id), and `provider_cache_claim=unproven_without_ab`. The native profile
+and named-session reuse preserve cache eligibility, but different disposable
+clone paths change Grok's cwd context and may miss across one-shot runs. A
+stable **logical** shared cwd is not applied (unsafe shared session writes).
+Relay thresholds and eviction can also make identical calls miss. Report
+unobservable metrics as unobservable. Never claim a provider cache improvement
+without A/B evidence from fresh vs cached input tokens across runs.
 
 ## Legacy and migration
 

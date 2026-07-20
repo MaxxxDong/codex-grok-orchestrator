@@ -85,3 +85,10 @@ def clone_deletion_authorized(root: Path) -> bool:
         and isinstance(session, dict)
         and session.get("closed") is True
     )
+
+
+def clone_deletion_intended(root: Path) -> bool:
+    """Return deletion intent before GC closes a retained external session."""
+    verify_artifact_contract(root)
+    receipt = _json_object(root / "verification.txt")["cleanup_receipt"]
+    return bool(isinstance(receipt, dict) and receipt.get("cloneDeletionAuthorized") is True)

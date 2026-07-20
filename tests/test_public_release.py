@@ -459,3 +459,8 @@ def test_public_launch_files_have_no_private_markers() -> None:
             if pattern.search(text):
                 offenders.append(f"{relative}: {pattern.pattern}")
     assert offenders == []
+
+
+def test_worker_runtime_output_is_excluded_from_release_build_context() -> None:
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".grok-output/" in ignored

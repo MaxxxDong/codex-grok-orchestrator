@@ -12,13 +12,12 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from grok_worker.dispatcher import hash_identity
+from grok_worker.execution_contract import ExecutionContract, ExecutionContractError
 from grok_worker.paths import default_shared_cache_root
 from grok_worker.process_launch import hidden_startup_info
 from grok_worker.run_config import RunConfig
 
-_PATH_FIELDS = frozenset(
-    {"source", "disposable_root", "artifact_root", "shared_cache_root"}
-)
+_PATH_FIELDS = frozenset({"source", "disposable_root", "artifact_root", "shared_cache_root"})
 _DETACHED_CHILDREN: list[subprocess.Popen[bytes]] = []
 
 
@@ -31,6 +30,10 @@ def run_config_to_payload(cfg: RunConfig) -> dict[str, Any]:
     for name in _PATH_FIELDS:
         value = payload[name]
         payload[name] = str(value) if value is not None else None
+    # Normalize nested execution contract to the public mapping shape.
+    execution = cfg.execution
+    if execution is not None:
+        payload["execution"] = execution.to_dict()
     return payload
 
 
@@ -48,7 +51,66 @@ def run_config_from_payload(payload: object) -> RunConfig:
             if not isinstance(value, str):
                 raise ValueError(f"detached run config field {name} must be a path string")
             values[name] = Path(value)
+    raw_execution = values.get("execution")
+    if raw_execution is not None:
+        if isinstance(raw_execution, ExecutionContract):
+            pass
+        elif isinstance(raw_execution, dict):
+            try:
+                # asdict may nest NamedSubtask as dicts; accept public mapping too.
+                public_shape = (
+                    "targetFiles" in raw_execution
+                    or "subtasks" in raw_execution
+                    or not raw_execution
+                )
+                if public_shape:
+                    values["execution"] = ExecutionContract.from_mapping(raw_execution)
+                else:
+                    # dataclass asdict shape: snake_case fields
+                    values["execution"] = ExecutionContract.from_mapping(
+                        _snake_execution_to_public(raw_execution)
+                    )
+            except ExecutionContractError as exc:
+                raise ValueError(f"invalid execution contract: {exc}") from exc
+        else:
+            raise ValueError("detached run config field execution must be an object")
     return RunConfig(**values)
+
+
+def _snake_execution_to_public(raw: dict[str, Any]) -> dict[str, Any]:
+    mapping = {
+        "target_files": "targetFiles",
+        "target_modules": "targetModules",
+        "known_failure_evidence": "knownFailureEvidence",
+        "focused_checks": "focusedChecks",
+        "final_gates": "finalGates",
+        "risk_tags": "riskTags",
+        "subtasks": "subtasks",
+        "required_failed_gates": "requiredFailedGates",
+    }
+    out: dict[str, Any] = {}
+    for key, public in mapping.items():
+        if key in raw:
+            value = raw[key]
+            if key == "subtasks" and isinstance(value, list):
+                cleaned = []
+                for item in value:
+                    if isinstance(item, dict):
+                        cleaned.append(
+                            {
+                                "name": item.get("name"),
+                                "goal": item.get("goal"),
+                                "readonly": item.get("readonly", True),
+                            }
+                        )
+                out[public] = cleaned
+            else:
+                out[public] = value
+    # Also accept already-public keys mixed in.
+    for public in mapping.values():
+        if public in raw and public not in out:
+            out[public] = raw[public]
+    return out
 
 
 def _safe_launch_log(shared_cache_root: Path, run_id: str) -> tuple[BinaryIO, Path]:

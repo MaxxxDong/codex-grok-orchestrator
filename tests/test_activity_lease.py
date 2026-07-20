@@ -94,12 +94,8 @@ def test_activity_lease_uses_hidden_windows_launch_policy(
 
 def test_policy_can_change_while_lease_is_live(tmp_path: Path) -> None:
     clone = _clone(tmp_path)
-    original = initialize_lease(
-        clone, idle_timeout_seconds=30, hard_timeout_seconds=120
-    )
-    updated = set_lease_policy(
-        clone, idle_timeout_seconds=60, hard_timeout_seconds=None
-    )
+    original = initialize_lease(clone, idle_timeout_seconds=30, hard_timeout_seconds=120)
+    updated = set_lease_policy(clone, idle_timeout_seconds=60, hard_timeout_seconds=None)
 
     assert updated.idle_timeout_seconds == 60
     assert updated.hard_timeout_seconds is None
@@ -123,6 +119,29 @@ def test_idle_lease_terminates_quiet_process(tmp_path: Path) -> None:
     assert result.exit_code == LEASE_TIMEOUT_EXIT_CODE
     assert result.timeout_kind == "idle"
     assert "activity lease expired" in (result.timeout_message or "")
+
+
+def test_quiet_process_still_runs_periodic_progress_tick(tmp_path: Path) -> None:
+    clone = _clone(tmp_path)
+    ticks = 0
+
+    def on_tick() -> None:
+        nonlocal ticks
+        ticks += 1
+
+    result = run_with_activity_lease(
+        _python_sleep(0.2),
+        clone=clone,
+        log=tmp_path / "agent.log",
+        env={},
+        idle_timeout_seconds=2,
+        hard_timeout_seconds=3,
+        poll_seconds=0.02,
+        on_tick=on_tick,
+    )
+
+    assert result.exit_code == 0
+    assert ticks >= 2
 
 
 def test_progress_updates_renew_idle_lease(tmp_path: Path) -> None:

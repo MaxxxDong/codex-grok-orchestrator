@@ -63,6 +63,10 @@ def test_one_shot_success_appends_metrics_and_embeds_in_receipt(
     assert record["cached_tokens"] is None
     assert record["output_tokens"] is None
     assert record["cache_ratio"] is None
+    assert "process_duration_seconds" in record
+    assert isinstance(record["process_duration_seconds"], (int, float))
+    assert record["process_duration_seconds"] >= 0
+    assert record.get("model_calls") is None
 
     art = Path(outcome.artifact_path or "")  # type: ignore[attr-defined]
     receipt = json.loads((art / "verification.txt").read_text(encoding="utf-8"))
