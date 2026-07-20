@@ -118,6 +118,7 @@ uv run pytest
 grok-worker status --source /path/to/repository --json
 
 grok-worker run \
+  --detach \
   --source /path/to/repository \
   --backend native \
   --mode analysis \
@@ -125,7 +126,16 @@ grok-worker run \
   --prompt "检查打包、隐私与发布风险；不要修改文件。"
 ```
 
-`run` 默认使用原生 Headless；需要旧通信层时显式传 `--backend acp`。实现任务使用 `--mode implementation`。普通 staged、unstaged、untracked 文件会经过敏感内容与软链接检查后自动快照；ignored 文件不会复制，疑似密钥与越界软链接仍拒绝启动。旧 `--include-dirty` / `--include-dirty-path` 只作兼容，不再是启动门槛，也不再过滤其他安全脏文件。
+`run` 默认使用原生 Headless；Codex 调度时使用 `--detach`，启动回执返回后由
+`watch` 等待事件，不再保持前台终端并每 10/30 秒轮询。直接交互或启动器诊断
+仍可省略 `--detach`。需要旧通信层时显式传 `--backend acp`。实现任务使用
+`--mode implementation`。普通 staged、unstaged、untracked 文件会经过敏感内容与软链接检查后自动快照；ignored 文件不会复制，疑似密钥与越界软链接仍拒绝启动。旧 `--include-dirty` / `--include-dirty-path` 只作兼容，不再是启动门槛，也不再过滤其他安全脏文件。
+
+脏树包含测试 PAT、Bearer 或 API Key 形状时，可先运行
+`grok-worker preflight --source /path/to/repository --json`。它一次返回所有
+命中的相对路径与规则代码，不返回密钥值。等待任务时使用
+`grok-worker watch --run-id <id> --wait-seconds 300 --json`：事件出现立即返回，
+否则才给出一次紧凑健康心跳，避免调度器反复读取完整状态和日志。
 
 脏树包含测试 PAT、Bearer 或 API Key 形状时，可先运行
 `grok-worker preflight --source /path/to/repository --json`。它一次返回所有
@@ -282,6 +292,7 @@ Source launcher: `./bin/grok-worker`.
 grok-worker status --source /path/to/repository --json
 
 grok-worker run \
+  --detach \
   --source /path/to/repository \
   --backend native \
   --mode analysis \
@@ -289,7 +300,11 @@ grok-worker run \
   --prompt "Audit packaging, privacy, and release readiness. Do not edit files."
 ```
 
-`run` defaults to native headless; use `--backend acp` only for compatibility. Use `--mode implementation` for edits. Ordinary staged, unstaged, and untracked files are automatically snapshotted after sensitive-content and symlink checks. Ignored files are never copied; suspected secrets and escaping symlinks still block startup. Legacy dirty flags remain accepted but no longer filter other safe dirt.
+`run` defaults to native headless. Codex dispatchers use `--detach`, then wait on
+`watch` instead of keeping a foreground terminal and polling every 10/30 seconds.
+Omit `--detach` only for direct interactive use or launcher diagnosis. Use
+`--backend acp` only for compatibility and `--mode implementation` for edits.
+Ordinary staged, unstaged, and untracked files are automatically snapshotted after sensitive-content and symlink checks. Ignored files are never copied; suspected secrets and escaping symlinks still block startup. Legacy dirty flags remain accepted but no longer filter other safe dirt.
 
 ### Named-session usage
 

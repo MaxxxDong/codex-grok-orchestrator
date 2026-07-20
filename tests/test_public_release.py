@@ -199,6 +199,14 @@ def test_public_skill_does_not_hard_lock_one_model() -> None:
     assert "GROK_WORKER_MODEL" in text
 
 
+def test_skill_uses_detached_event_first_default_for_codex() -> None:
+    text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "--detach" in text
+    assert "--wait-seconds 300" in text
+    assert "write_stdin" in text
+    assert "one dispatcher-scoped watch" in text.lower()
+
+
 def test_source_checkout_launcher_has_no_host_fallback() -> None:
     text = (ROOT / "bin" / "grok-worker").read_text(encoding="utf-8")
     assert "/Users/" not in text

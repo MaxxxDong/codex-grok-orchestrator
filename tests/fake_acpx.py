@@ -14,10 +14,13 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
     script = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
-        import json, os, sys
+        import json, os, sys, time
         from pathlib import Path
 
         behavior = os.environ.get("FAKE_ACPX_BEHAVIOR", {behavior!r})
+        delay = float(os.environ.get("FAKE_ACPX_DELAY_SECONDS", "0"))
+        if delay > 0:
+            time.sleep(delay)
         if os.environ.get("GROK_WORKER_LIFECYCLE") != "1":
             print("missing lifecycle environment", file=sys.stderr)
             sys.exit(92)

@@ -5,7 +5,6 @@ All notable public changes are recorded here. The project follows semantic versi
 ## [Unreleased]
 
 ## [0.5.3] - 2026-07-19
-
 ### Added
 
 - `grok-worker watch`: event-first waits with immediate terminal/attention wakeup
