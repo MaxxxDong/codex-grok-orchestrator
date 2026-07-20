@@ -17,7 +17,11 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-20
 
-`grok-worker` **0.6.0** makes detached, event-first execution the Codex default:
+`grok-worker` **0.6.1** is a maintenance release on top of detached event-first
+execution: CLI `--json` compatibility for cache commands, concise Click usage
+errors, bounded honest cache ratios with model-call and process-duration metrics,
+and tighter stable-prompt efficiency rules. **0.6.0** made detached, event-first
+execution the Codex default:
 `run --detach` returns a launch receipt immediately, and `watch` wakes on
 terminal, settled, or attention events with a compact 300-second heartbeat
 fallback. Detached runs reuse the existing lifecycle, High-reasoning checks,
@@ -108,7 +112,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.0"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
 ```
 
 开发：
@@ -186,7 +190,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.6.0 升级](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.6.1 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -282,7 +286,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.0"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.6.1"
 ```
 
 Development:
@@ -349,7 +353,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.6.0 upgrade](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.6.1 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)

@@ -412,6 +412,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.6.0`. Lifecycle and artifact formats remain
+The current public release is `0.6.1`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.

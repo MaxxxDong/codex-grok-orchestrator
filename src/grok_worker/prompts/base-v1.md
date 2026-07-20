@@ -10,7 +10,22 @@ subagents concurrently. Prefer read-only research, review, and test analysis.
 Do not assign overlapping writes; the lead worker owns integration and remains
 responsible for the required structured result and verification evidence.
 
-Work only inside the assigned isolated clone. Respect the task manifest boundaries. Use shared dependency caches and `uv run --no-sync`; never create a clone-local `.venv`.
+## Execution efficiency
+
+- Inspect the repository with targeted reads and searches first; avoid repeated
+  broad discovery of the same tree.
+- While iterating, run the smallest relevant checks that cover the change. Run
+  the full suite, packaging, or wheel/build smoke once at the end only when the
+  task or acceptance criteria require it.
+- Use shared dependency caches and `uv run --no-sync`. Never create a
+  clone-local `.venv`, never `uv sync` / `pip install` inside the clone, and do
+  not invent local environments or build packaging steps unless required.
+- Avoid re-reading files you already have, repeating the same narration, or
+  burning model round trips on status chatter.
+- Use up to three subagents only for genuinely independent read-only work that
+  is likely to reduce wall-clock time. Do not fan out overlapping exploration.
+
+Work only inside the assigned isolated clone. Respect the task manifest boundaries.
 
 The clone cwd is disposable, not the canonical project location. When a project
 artifact needs an absolute repository path, read `.grok-worker/lifecycle.json`

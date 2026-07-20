@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -206,6 +207,8 @@ def execute_worker(
                 cmd = build_native_cmd(cfg, clone, prompt_file)
             else:
                 cmd = build_acpx_cmd(cfg, clone, agent, prompt)
+            # Monotonic wall for one-shot backend duration (not filesystem mtime).
+            process_started = time.monotonic()
             process_result = run_with_activity_lease(
                 cmd,
                 clone=clone,
@@ -216,10 +219,12 @@ def execute_worker(
                 on_start=_record_child,
                 on_output=_inspect_live_output,
             )
+            process_duration_seconds = time.monotonic() - process_started
         except (FileNotFoundError, OSError, ValueError) as exc:
             with agent_log.open("a", encoding="utf-8") as stream:
                 stream.write(f"[grok-worker] startup failed: {exc}\n")
             process_result = LeasedProcessResult(127)
+            process_duration_seconds = None
         worker_exit = process_result.exit_code
         child_proc = None
         meta.acpx_exit_code = worker_exit
@@ -240,16 +245,19 @@ def execute_worker(
                 f"native Grok ignored requested reasoning effort {cfg.reasoning_effort!r}"
             )
         metrics_path = shared / "metrics" / "worker-runs.jsonl"
+        metric_record: dict[str, object] = {
+            "task_id": task_id,
+            "mode": cfg.mode,
+            "run_kind": "one-shot",
+            "backend": cfg.backend,
+            "process_exit_code": worker_exit,
+            "acpx_exit_code": worker_exit if cfg.backend == "acp" else None,
+        }
+        if process_duration_seconds is not None:
+            metric_record["process_duration_seconds"] = round(process_duration_seconds, 6)
         append_metric(
             metrics_path,
-            {
-                "task_id": task_id,
-                "mode": cfg.mode,
-                "run_kind": "one-shot",
-                "backend": cfg.backend,
-                "process_exit_code": worker_exit,
-                "acpx_exit_code": worker_exit if cfg.backend == "acp" else None,
-            },
+            metric_record,
             extract_token_metrics_from_text(log_text),
         )
         audit: dict[str, object] = {

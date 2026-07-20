@@ -1,6 +1,7 @@
 .DS_Store
 .grok-artifacts/
 .grok-disposable/
+.grok-output/
 .grok-worker/
 .mypy_cache/
 .pytest_cache/
