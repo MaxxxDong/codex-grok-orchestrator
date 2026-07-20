@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
 from grok_worker.cli import main
+from grok_worker.detached import start_detached_run
+from grok_worker.run_config import RunConfig
 
 
 def _start_args(
@@ -75,6 +78,53 @@ def _watch(
         argv.extend(["--dispatcher-id", dispatcher_id])
     assert main(argv) == 0
     return json.loads(capsys.readouterr().out)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific launch policy")
+def test_windows_detached_launcher_never_creates_a_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 43210
+
+        def __init__(self) -> None:
+            self.stdin = open(os.devnull, "wb")
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    def fake_popen(_command: list[str], **kwargs: object) -> FakeProcess:
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr("grok_worker.detached.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("grok_worker.detached._DETACHED_CHILDREN", [])
+    cfg = RunConfig(
+        source=None,
+        prompt="test hidden detached launch",
+        shared_cache_root=tmp_path,
+        mode="research",
+        task_id="hidden-detached",
+        run_id="hidden-detached-run",
+        dispatcher_id="hidden-detached-dispatcher",
+        prompt_only=True,
+    )
+
+    start_detached_run(cfg)
+
+    flags = int(captured["creationflags"])
+    assert flags & subprocess.CREATE_NO_WINDOW
+    assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+    assert not flags & subprocess.DETACHED_PROCESS
+    startup_info = captured["startupinfo"]
+    assert isinstance(startup_info, subprocess.STARTUPINFO)
+    assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert startup_info.wShowWindow == subprocess.SW_HIDE
 
 
 def test_detached_run_returns_before_worker_and_watch_gets_terminal(

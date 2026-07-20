@@ -13,6 +13,7 @@ from typing import Any, BinaryIO
 
 from grok_worker.dispatcher import hash_identity
 from grok_worker.paths import default_shared_cache_root
+from grok_worker.process_launch import hidden_startup_info
 from grok_worker.run_config import RunConfig
 
 _PATH_FIELDS = frozenset(
@@ -100,8 +101,9 @@ def start_detached_run(cfg: RunConfig) -> dict[str, Any]:
     }
     if os.name == "nt":
         create_group = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        detached_process = int(getattr(subprocess, "DETACHED_PROCESS", 0))
-        popen_kwargs["creationflags"] = create_group | detached_process
+        no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        popen_kwargs["creationflags"] = create_group | no_window
+        popen_kwargs["startupinfo"] = hidden_startup_info()
     else:
         popen_kwargs["start_new_session"] = True
 
