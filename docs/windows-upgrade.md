@@ -1,9 +1,16 @@
-# Windows / WSL upgrade: 0.3-0.5.3 to 0.7.0
+# Windows / WSL upgrade: 0.3-0.5.3 to 0.7.1
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
+
+## What changes in 0.7.1
+
+- Test-only cross-process coordination no longer depends on macOS
+  `multiprocessing` semaphores. Production behavior is unchanged from 0.7.0.
+- Windows/WSL runtime behavior does not otherwise change; this maintenance
+  release keeps all 0.7.0 execution, High-reasoning, cache, and tool defaults.
 
 ## What changes in 0.7.0
 
@@ -94,7 +101,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.7.0 --depth 1 \
+git clone --branch v0.7.1 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 

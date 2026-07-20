@@ -17,7 +17,11 @@ Python package and CLI name (unchanged): **`grok-worker`**
 
 ### Latest update — 2026-07-20
 
-`grok-worker` **0.7.0** focuses on faster repeated repository work without
+`grok-worker` **0.7.1** makes the real cross-process lock tests portable to the
+Grok Build macOS sandbox without weakening their concurrency assertions. It
+replaces test-only `multiprocessing` semaphores with independent Python
+subprocesses and a plain-file start barrier; production behavior is unchanged.
+**0.7.0** focuses on faster repeated repository work without
 weakening High-reasoning enforcement, isolation, cleanup, or lifecycle truth:
 bounded execution contracts (targets, focused checks, risk-expanded final
 gates), native same-task continuation, stable prompt fingerprints with honest
@@ -32,6 +36,7 @@ CLI/metrics/efficiency guidance; **0.6.0** made detached event-first
 
 | Version | Main update / 核心更新 |
 |---|---|
+| [`0.7.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.1) | Sandbox-portable real subprocess concurrency tests; no production behavior change. / 真实子进程并发测试兼容 Grok macOS 沙箱，生产行为不变。 |
 | [`0.7.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.0) | Execution contracts, native continuation, JSON Schema result capture, tool policy, productive progress, cache fingerprints. / 执行契约、原生续跑、JSON Schema 结果落盘、工具策略、有效进展与缓存指纹。 |
 | [`0.6.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.1) | CLI compatibility, honest cache/model-call metrics, monotonic process timing, and tighter execution-efficiency guidance. / CLI 兼容、诚实缓存与模型调用指标、单调运行计时及执行提效规则。 |
 | [`0.6.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.6.0) | Detached launch, event-first `watch`, immediate attention signals, and bounded launcher logs. / 分离启动、事件优先等待、即时异常通知及有界启动日志。 |
@@ -128,7 +133,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.0"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.1"
 ```
 
 开发：
@@ -206,7 +211,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.7.0 升级](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.7.1 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -302,7 +307,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.0"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.1"
 ```
 
 Development:
@@ -369,7 +374,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
-- [Windows / WSL 0.3-0.5.3 → 0.7.0 upgrade](docs/windows-upgrade.md)
+- [Windows / WSL 0.3-0.5.3 → 0.7.1 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)

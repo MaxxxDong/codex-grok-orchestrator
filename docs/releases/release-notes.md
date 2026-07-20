@@ -30,6 +30,28 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-20 — Sandbox-portable concurrency tests / 沙箱兼容并发测试
+
+**Version:** `grok-worker` 0.7.1
+
+Five concurrency regressions previously used Python `multiprocessing` barriers
+and events. Grok Build's macOS sandbox rejects the underlying named semaphore
+creation before the production locks are exercised, producing deterministic
+`_multiprocessing.SemLock` permission failures. Version 0.7.1 replaces only that
+test harness with independent Python subprocesses coordinated by plain ready/go
+files. The same POSIX file locks, cache leases, dispatcher capacity,
+same-source exclusion, and process-exit release behavior remain under test.
+
+五个并发回归测试此前依赖 Python `multiprocessing` 屏障与事件，Grok Build 的 macOS
+沙箱会在真正测试生产锁之前拒绝底层命名信号量。0.7.1 仅将测试协调层替换为独立 Python
+子进程和普通 ready/go 文件；生产锁、缓存租约、并发容量、同源互斥和进程退出释放语义不变。
+
+Release verification: host focused suite `25 passed`, full suite `292 passed`,
+Ruff and strict mypy; Grok Build macOS sandbox focused suite `25 passed in 2.69s`
+with no `SemLock`, `PermissionError`, or repository changes.
+
+---
+
 ## 2026-07-20 — CLI compatibility, honest cache metrics / CLI 兼容与诚实缓存指标
 
 **Version:** `grok-worker` 0.6.1

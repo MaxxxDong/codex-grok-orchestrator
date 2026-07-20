@@ -4,6 +4,27 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-20
+
+### Fixed
+
+- Replaced the five macOS concurrency tests that depended on
+  `multiprocessing` semaphores with real Python subprocesses coordinated by a
+  plain-file barrier. The tests still exercise the production POSIX file locks
+  across independent processes, but now run inside Grok Build's macOS sandbox
+  without deterministic `_multiprocessing.SemLock` permission failures.
+- Kept the existing test count and assertions for shared cache leases,
+  dispatcher capacity, same-source exclusion, and OS lock release after a
+  process exits. No production lock, cache, lifecycle, tool, or reasoning
+  behavior changed.
+
+### Verification
+
+- Host: focused concurrency suite `25 passed`; full suite `292 passed`; Ruff
+  and strict mypy passed.
+- Grok Build macOS sandbox: focused concurrency suite `25 passed in 2.69s`, no
+  `SemLock` or `PermissionError`, with an empty changes patch.
+
 ## [0.7.0] - 2026-07-20
 
 ### Added

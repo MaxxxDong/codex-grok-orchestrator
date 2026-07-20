@@ -5,7 +5,6 @@ Uses temp shared cache and FileLock only — no real Grok sessions.
 
 from __future__ import annotations
 
-import multiprocessing as mp
 import time
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from grok_worker.dispatcher import (
 from grok_worker.locks import FileLock
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
 from grok_worker.paths import meta_path
+from tests.subprocess_concurrency import run_barrier_workers, start_crash_holder, wait_for_path
 
 
 def test_max_concurrent_default_remains_ten() -> None:
@@ -239,50 +239,17 @@ def test_session_open_not_in_root_scoped_active_count(tmp_roots: dict[str, Path]
 # --- Multiprocess barrier tests ------------------------------------------------
 
 
-def _slot_worker(
-    i: int,
-    shared: str,
-    did: str,
-    barrier: mp.synchronize.Barrier,
-    hold_s: float,
-    result_q: mp.Queue,
-) -> None:
-    from grok_worker.dispatcher import DispatcherConcurrencyError, try_acquire_slot
-
-    barrier.wait(timeout=30)
-    try:
-        lock = try_acquire_slot(Path(shared), did)
-    except DispatcherConcurrencyError as exc:
-        result_q.put({"i": i, "ok": False, "code": exc.code, "active": exc.active})
-        return
-    t0 = time.time()
-    time.sleep(hold_s)
-    lock.release()
-    result_q.put({"i": i, "ok": True, "held_s": time.time() - t0})
-
-
 def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) -> None:
     """One process beyond capacity gets BUSY without oversubscription."""
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "mp-slots"
     n = MAX_CONCURRENT_WORKERS + 1
-    ctx = mp.get_context("spawn")
-    barrier = ctx.Barrier(n)
-    result_q: mp.Queue = ctx.Queue()
-    procs = [
-        ctx.Process(
-            target=_slot_worker,
-            args=(i, str(shared), did, barrier, 0.4, result_q),
-        )
-        for i in range(n)
-    ]
-    for p in procs:
-        p.start()
-    for p in procs:
-        p.join(timeout=30)
-        assert p.exitcode == 0
-    results = [result_q.get(timeout=5) for _ in range(n)]
+    results, _ = run_barrier_workers(
+        tmp_path,
+        "slot",
+        [(i, shared, did, 0.4) for i in range(n)],
+    )
     ok = [r for r in results if r["ok"]]
     busy = [r for r in results if not r["ok"]]
     assert len(ok) == MAX_CONCURRENT_WORKERS
@@ -291,61 +258,17 @@ def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) 
     assert busy[0]["active"] == MAX_CONCURRENT_WORKERS
 
 
-def _impl_source_worker(
-    i: int,
-    shared: str,
-    did: str,
-    source: str,
-    barrier: mp.synchronize.Barrier,
-    hold_s: float,
-    result_q: mp.Queue,
-) -> None:
-    from grok_worker.dispatcher import (
-        SameSourceConflictError,
-        reserve_dispatcher_capacity,
-    )
-
-    barrier.wait(timeout=30)
-    try:
-        lease = reserve_dispatcher_capacity(
-            Path(shared),
-            did,
-            mode="implementation",
-            source_realpath=source,
-        )
-    except SameSourceConflictError as exc:
-        result_q.put({"i": i, "ok": False, "err": "source", "hash": exc.source_hash})
-        return
-    except Exception as exc:  # noqa: BLE001
-        result_q.put({"i": i, "ok": False, "err": type(exc).__name__})
-        return
-    time.sleep(hold_s)
-    lease.release()
-    result_q.put({"i": i, "ok": True})
-
-
 def test_multiprocess_same_source_implementation_exclusive(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
     src = tmp_path / "src"
     src.mkdir()
     source = str(src.resolve())
-    ctx = mp.get_context("spawn")
-    barrier = ctx.Barrier(2)
-    result_q: mp.Queue = ctx.Queue()
-    procs = [
-        ctx.Process(
-            target=_impl_source_worker,
-            args=(i, str(shared), "d-src", source, barrier, 0.5, result_q),
-        )
-        for i in range(2)
-    ]
-    for p in procs:
-        p.start()
-    for p in procs:
-        p.join(timeout=30)
-        assert p.exitcode == 0
-    results = [result_q.get(timeout=5) for _ in range(2)]
+    results, _ = run_barrier_workers(
+        tmp_path,
+        "implementation-source",
+        [(i, shared, "d-src", source, 0.5) for i in range(2)],
+    )
     ok = [r for r in results if r["ok"]]
     fail = [r for r in results if not r["ok"]]
     assert len(ok) == 1
@@ -355,32 +278,24 @@ def test_multiprocess_same_source_implementation_exclusive(tmp_path: Path) -> No
     assert source not in str(fail[0])
 
 
-def _crash_holder(shared: str, did: str, ready: mp.synchronize.Event) -> None:
-    from grok_worker.dispatcher import try_acquire_slot
-
-    lock = try_acquire_slot(Path(shared), did, limit=10)
-    # Deliberately do not release — process exit must free the OS flock.
-    ready.set()
-    time.sleep(60)
-    # Unreachable if parent kills us; keep lock ref alive.
-    _ = lock
-
-
 def test_os_process_exit_releases_slot_for_reuse(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "crash-d"
-    ctx = mp.get_context("spawn")
-    ready = ctx.Event()
-    p = ctx.Process(target=_crash_holder, args=(str(shared), did, ready))
-    p.start()
-    assert ready.wait(timeout=15)
-    # While holder lives, slot budget is reduced.
-    held_before = count_held_slots(shared, did)
-    assert held_before >= 1
-    p.kill()
-    p.join(timeout=15)
-    assert p.exitcode is not None
+    ready = tmp_path / "crash-holder.ready"
+    process = start_crash_holder(shared, did, ready)
+    try:
+        assert wait_for_path(ready, timeout=15)
+        # While holder lives, slot budget is reduced.
+        held_before = count_held_slots(shared, did)
+        assert held_before >= 1
+        process.kill()
+        process.wait(timeout=15)
+        assert process.returncode is not None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
     # After process exit, OS releases flock; all slots reusable.
     deadline = time.time() + 5
     while time.time() < deadline:

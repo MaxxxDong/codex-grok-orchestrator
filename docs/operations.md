@@ -426,9 +426,16 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.7.0`. Lifecycle and artifact formats remain
+The current public release is `0.7.1`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
+
+### 0.7.1 test portability
+
+The repository's cross-process lock tests use independent Python subprocesses
+and a plain-file barrier instead of `multiprocessing` semaphores. This preserves
+real POSIX lock contention while allowing the tests to run in Grok Build's
+macOS sandbox. Runtime worker behavior is unchanged from 0.7.0.
 
 ### 0.7.0 CLI surface (efficiency)
 
