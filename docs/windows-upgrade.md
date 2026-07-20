@@ -76,7 +76,7 @@ the only active runtime chain.
 3. Fetch and verify the annotated `v0.6.0` tag and Release.
 4. Merge or port the upstream tag into an isolated worktree based on the
    existing Windows-native branch. Do not replace the Windows branch with a
-   plain tag checkout.
+   plain tag checkout or a second `git clone --branch v0.6.0` installation.
 5. Preserve Win32 file locking, reparse-safe cleanup, PowerShell 7/UTF-8,
    adaptive cmd decoding, hidden child processes, Windows process-tree cleanup,
    managed acpx, configurable worker capacity, and the shared status root.
