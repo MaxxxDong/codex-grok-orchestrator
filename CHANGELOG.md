@@ -4,6 +4,19 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-20
+
+### Fixed
+
+- Made the native-command construction test independent of a locally installed
+  Grok CLI by explicitly injecting the configured binary name. This fixes the
+  clean GitHub Actions matrix failure without changing production binary
+  discovery or runtime behavior.
+
+### Verification
+
+- Full GitHub Actions matrix: Ubuntu and macOS on Python 3.12 and 3.13.
+
 ## [0.7.1] - 2026-07-20
 
 ### Fixed

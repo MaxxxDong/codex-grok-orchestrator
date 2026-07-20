@@ -426,9 +426,14 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.7.1`. Lifecycle and artifact formats remain
+The current public release is `0.7.2`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
+
+### 0.7.2 CI portability
+
+The clean CI command-construction test injects its test Grok binary explicitly.
+Production binary discovery and runtime behavior remain unchanged from 0.7.1.
 
 ### 0.7.1 test portability
 

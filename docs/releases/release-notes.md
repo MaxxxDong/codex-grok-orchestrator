@@ -30,6 +30,23 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-20 — Clean CI binary isolation / 干净 CI 二进制隔离
+
+**Version:** `grok-worker` 0.7.2
+
+The native-command construction test now explicitly injects its fake Grok
+binary instead of depending on the developer machine's `PATH`. This closes the
+GitHub Actions failure on clean Ubuntu and macOS runners. Production Grok binary
+discovery and all 0.7.1 runtime behavior are unchanged.
+
+原生命令构造测试现在显式注入测试用 Grok 二进制名，不再依赖开发机 `PATH`。这修复
+干净 Ubuntu/macOS GitHub runner 上的失败；生产 Grok 二进制发现和 0.7.1 运行行为不变。
+
+Release verification: full GitHub Actions matrix on Ubuntu and macOS with
+Python 3.12 and 3.13, plus release build and payload checks.
+
+---
+
 ## 2026-07-20 — Sandbox-portable concurrency tests / 沙箱兼容并发测试
 
 **Version:** `grok-worker` 0.7.1

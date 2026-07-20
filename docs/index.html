@@ -893,7 +893,7 @@
           安装包后执行一次有界分析任务。实现模式使用相同形态。
         </p>
 
-        <pre data-lang-block="en"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.1"
+        <pre data-lang-block="en"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.2"
 
 grok-worker status --source /path/to/repository --json
 
@@ -902,7 +902,7 @@ grok-worker run \
   --mode analysis \
   --task-id public-release-audit \
   --prompt "Audit packaging and release readiness. Do not edit files."</code></pre>
-        <pre data-lang-block="zh"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.1"
+        <pre data-lang-block="zh"><code>uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.2"
 
 grok-worker status --source /path/to/repository --json
 
@@ -1001,6 +1001,7 @@ grok-worker run \
           每个版本解决一组明确的运行问题；详细改动与验证证据统一保留在正式发布说明中。
         </p>
         <ol class="release-list" data-lang-block="en">
+          <li><strong>0.7.2</strong><span>Clean CI binary isolation with no production behavior change.</span></li>
           <li><strong>0.7.1</strong><span>Sandbox-portable real subprocess concurrency tests with no production behavior change.</span></li>
           <li><strong>0.7.0</strong><span>Execution contracts, native continuation, JSON Schema result capture, tool policy, productive progress, and cache fingerprints.</span></li>
           <li><strong>0.6.1</strong><span>CLI compatibility, honest cache/model-call metrics, process timing, and tighter efficiency guidance.</span></li>
@@ -1015,6 +1016,7 @@ grok-worker run \
           <li><strong>0.3.0</strong><span>Initial standalone public CLI, lifecycle documentation, and bilingual guidance.</span></li>
         </ol>
         <ol class="release-list" data-lang-block="zh">
+          <li><strong>0.7.2</strong><span>干净 CI 二进制隔离，生产行为不变。</span></li>
           <li><strong>0.7.1</strong><span>真实子进程并发测试兼容 Grok macOS 沙箱，生产行为不变。</span></li>
           <li><strong>0.7.0</strong><span>执行契约、原生续跑、JSON Schema 结果落盘、工具策略、有效进展与缓存指纹。</span></li>
           <li><strong>0.6.1</strong><span>CLI 兼容、诚实缓存与模型调用指标、运行计时及执行提效规则。</span></li>

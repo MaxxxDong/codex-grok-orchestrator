@@ -120,7 +120,10 @@ def test_tool_policy_signature_and_native_flags() -> None:
     assert cmd[cmd.index("--max-turns") + 1] == "40"
 
 
-def test_build_native_cmd_includes_json_schema_and_continue(tmp_path: Path) -> None:
+def test_build_native_cmd_includes_json_schema_and_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
     prompt = tmp_path / "p.md"
     prompt.write_text("hi\n", encoding="utf-8")
     cfg = RunConfig(
