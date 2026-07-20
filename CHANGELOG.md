@@ -29,6 +29,9 @@ All notable public changes are recorded here. The project follows semantic versi
 - Automatic budget continuation now stops after a repeated identical failure with
   no observable workspace/result/verification progress, preserving manual
   continuation rather than generating an unbounded series of paid calls.
+- Runs register their disposable root in a bounded shared observability index.
+  Default `health` now reports workers across known roots, while an explicit
+  `--disposable-root` remains a single-root query.
 
 ### Fixed
 

@@ -435,7 +435,9 @@ first failure.
 - **Health checks**: `health` remains a diagnostic-only read-only fallback. It reports lifecycle,
   bounded non-symlink workspace activity, fixed progress step, result/artifact
   readiness, process identity, CPU/RSS, and timeout remaining, but never kills,
-  restarts, preempts, or disposes a Worker. The runner renews an activity lease
+  restarts, preempts, or disposes a Worker. Without an explicit root it reads the
+  bounded shared root registry and aggregates all known disposable roots; pass
+  `--disposable-root` for a deliberately single-root view. The runner renews an activity lease
   from managed Grok session events, progress/result files, agent-log growth, and
   bounded workspace activity. A truly quiet worker expires after 1800 seconds by
   default; the separate 24h hard cap prevents an active infinite loop.

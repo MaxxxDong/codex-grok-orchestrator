@@ -30,6 +30,7 @@ class HealthReport:
     interval_seconds: int = HEALTH_INSPECT_INTERVAL_SECONDS
     diagnostic_only: bool = True
     mutates_worker: bool = False
+    roots: list[str] = field(default_factory=list)
     clones: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,6 +87,7 @@ def collect_health(
     """Inspect all managed clones under *disposable_root* without mutation."""
     report = HealthReport()
     root = Path(disposable_root)
+    report.roots.append(str(root.resolve()))
     if not root.is_dir():
         return report
     for child in sorted(root.iterdir(), key=lambda p: p.name):
@@ -101,5 +103,7 @@ def collect_health(
             continue
         if dispatcher_id is not None and meta.dispatcher_id != dispatcher_id:
             continue
-        report.clones.append(inspect_clone_health(meta, child))
+        row = inspect_clone_health(meta, child)
+        row["disposable_root"] = str(root.resolve())
+        report.clones.append(row)
     return report

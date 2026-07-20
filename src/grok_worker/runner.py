@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from grok_worker.cache_policy import CachePolicy, ensure_cache_capacity
@@ -36,6 +37,7 @@ from grok_worker.paths import (
     is_managed_clone,
     meta_path,
 )
+from grok_worker.root_registry import register_disposable_root
 from grok_worker.run_config import RunConfig, RunOutcome, default_agent_bin
 from grok_worker.safety import SafetyError, safe_rmtree, safe_unlink
 from grok_worker.task_id import TaskIdError, validate_task_id
@@ -74,6 +76,14 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
     disposable.mkdir(parents=True, exist_ok=True)
     artifacts.mkdir(parents=True, exist_ok=True)
     shared.mkdir(parents=True, exist_ok=True)
+    try:
+        register_disposable_root(shared, disposable)
+    except OSError as exc:
+        warnings.warn(
+            f"cross-root health registry unavailable: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     protected = [artifacts, shared, Path.home(), disposable]
     if source is not None:
         protected.insert(0, source)

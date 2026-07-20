@@ -268,8 +268,10 @@ edits a standalone clone. Root remains the sole integration owner and must
 review/serialize acceptance when changes overlap. A different dispatcher never
 blocks merely because it uses the same source path.
 
-There is **no** persistent `roots.json` registry or advisory slot-pointer JSON;
-the only reservation primitive is the held OS flock.
+There is no persistent reservation or advisory slot-pointer JSON; the only
+capacity reservation primitive is the held OS flock. A separate bounded
+`runtime/disposable-roots.json` registry exists only for read-only cross-root
+health discovery and never grants capacity or proves liveness.
 
 ## 1c. Timeouts and health
 
@@ -282,7 +284,9 @@ the only reservation primitive is the held OS flock.
 Health inspection records lifecycle, bounded non-symlink workspace activity,
 the fixed advisory progress step, result/artifact readiness, PID identity, and
 CPU/RSS when available. It does **not** terminate, interrupt, restart, or mutate a
-running worker merely because the interval elapsed. The foreground runner owns
+running worker merely because the interval elapsed. With no root argument it
+aggregates the bounded registry under the shared cache; an explicit
+`--disposable-root` keeps the query scoped to one root. The foreground runner owns
 termination: it reads `.grok-worker/lease.json`, renews the inactivity deadline
 from managed Grok session events, progress/result writes, agent-log growth, and
 bounded workspace activity, and terminates the backend process tree only when the

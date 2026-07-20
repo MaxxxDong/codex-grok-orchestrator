@@ -47,7 +47,7 @@ from grok_worker.dispatcher import (
     make_run_id,
 )
 from grok_worker.gc import gc_disposable_root, is_active
-from grok_worker.health import collect_health
+from grok_worker.health import HealthReport, collect_health
 from grok_worker.legacy import LegacyClass, LegacyError, import_legacy, list_unmarked
 from grok_worker.models import WorkerMeta
 from grok_worker.paths import (
@@ -57,6 +57,7 @@ from grok_worker.paths import (
     is_managed_clone,
     meta_path,
 )
+from grok_worker.root_registry import known_disposable_roots
 from grok_worker.run_config import default_one_shot_backend
 from grok_worker.runner import RunConfig, run_worker
 from grok_worker.settings import default_mcp_config, default_model, default_reasoning_effort
@@ -353,12 +354,13 @@ def cmd_run(
         src = source.resolve()
         disp = disposable_root.resolve() if disposable_root else default_disposable_root(src)
     arts = artifact_root.resolve() if artifact_root else default_artifact_root(disp)
+    shared = _shared(shared_cache_root)
     cfg = RunConfig(
         source=src,
         prompt=text,
         disposable_root=disp,
         artifact_root=arts,
-        shared_cache_root=_shared(shared_cache_root),
+        shared_cache_root=shared,
         cap_bytes=cap_bytes,
         keep_reason=keep,
         mode=mode,
@@ -710,15 +712,22 @@ def cmd_watch(
 def cmd_health(
     disposable_root: Path | None = typer.Option(None, "--disposable-root"),
     source: Path | None = typer.Option(None, "--source"),
+    shared_cache_root: Path | None = typer.Option(None, "--shared-cache-root"),
     dispatcher_id: str | None = typer.Option(None, "--dispatcher-id"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Diagnostic-only health inspection (read-only; never terminates workers)."""
+    disp_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
     root = _resolve_disposable(disposable_root, source)
-    report = collect_health(
-        root,
-        dispatcher_id=dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None,
-    )
+    roots = [root]
+    if disposable_root is None and source is None:
+        roots.extend(known_disposable_roots(_shared(shared_cache_root)))
+    unique_roots = {os.path.normcase(str(item.resolve())): item.resolve() for item in roots}
+    report = HealthReport()
+    for item in sorted(unique_roots.values(), key=lambda path: str(path).casefold()):
+        item_report = collect_health(item, dispatcher_id=disp_id)
+        report.roots.extend(item_report.roots)
+        report.clones.extend(item_report.clones)
     payload = report.to_dict()
     if as_json:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
