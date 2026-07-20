@@ -149,6 +149,15 @@ class ExecutionContract:
         """Concrete commands the lifecycle runner owns and executes exactly once."""
         return tuple(dict.fromkeys((*self.final_gates, *self.required_failed_gates)))
 
+    def validate_runner_gates(self) -> None:
+        """Reject task labels that cannot be executed from the clone root."""
+        for command in self.runner_final_gates():
+            if len(command.split()) == 1 and "/" not in command and "\\" not in command:
+                raise ExecutionContractError(
+                    f"final gate {command!r} must be an executable command, not a bare task name; "
+                    "include the repository wrapper and working directory"
+                )
+
     def signature(self) -> str:
         encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()

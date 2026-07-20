@@ -147,6 +147,12 @@ The stable prompt prefix is versioned base instructions + role instructions + a 
 
 Risk tags expand the final verification matrix. Never replace a previously failed required gate with a narrower focused check. Shared API/schema/security/cache/concurrency/build/migration/package changes must expand final gates.
 
+Runner-owned `finalGates` start at the clone root and must be complete executable
+commands, not task aliases such as `pytest` or `testDebugUnitTest`. Include the
+repository wrapper or working directory, for example `npm --prefix services/api
+test`, `.\gradlew.bat -p apps/android testDebugUnitTest`, or `uv run --no-sync
+pytest -q`.
+
 ## Commands
 
 Create one stable opaque ID for the current Root task and reuse it for all commands below:
@@ -351,10 +357,12 @@ Workers hold a shared cache-use lease. Cache GC requires an exclusive nonblockin
 
 Never create clone-local `.venv`. Python environments are fingerprinted shared
 environments under `venvs/`; uv, pip, npm, and Poetry caches use their shared
-buckets. A locked Python project attempts one frozen dependency prewarm, then
-workers run with shared cache variables. Prewarm failure is recorded as a
-startup warning and does not prevent Grok from attempting the task; real task
-verification still determines success.
+buckets. A locked Python project attempts one frozen dependency prewarm. Every
+nested npm project with `package.json` plus `package-lock.json` receives a
+clone-local `npm ci` from the shared download cache; source `node_modules` is
+never copied or linked. Prewarm failure is recorded as a startup warning and
+does not prevent Grok from attempting the task; real task verification still
+determines success.
 
 ## Lifecycle and retention
 

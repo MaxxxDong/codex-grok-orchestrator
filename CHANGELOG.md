@@ -37,6 +37,10 @@ All notable public changes are recorded here. The project follows semantic versi
 
 - Preserve backend/provider failures as the primary lifecycle error when missing
   structured output or artifact finalization is a secondary consequence.
+- Prepare locked nested npm projects inside disposable clones using the shared npm
+  download cache, including native Windows npm launcher resolution.
+- Reject bare runner-owned final-gate task names before clone creation or provider
+  invocation; gates must identify an executable command from the clone root.
 
 ## [0.7.2] - 2026-07-20
 

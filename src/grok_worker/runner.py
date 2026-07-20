@@ -47,6 +47,7 @@ __all__ = ["RunConfig", "RunOutcome", "run_worker"]
 
 
 def run_worker(cfg: RunConfig) -> RunOutcome:
+    (cfg.execution or ExecutionContract.empty()).validate_runner_gates()
     if cfg.prompt_only:
         if cfg.mode == "implementation":
             raise CloneError("prompt-only mode rejects implementation mode")

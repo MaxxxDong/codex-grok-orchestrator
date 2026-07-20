@@ -10,7 +10,9 @@ from unittest import mock
 import pytest
 
 from grok_worker.deps import (
+    NPM_SYNC_CONTRACT,
     DepsError,
+    build_npm_sync_cmd,
     build_uv_sync_cmd,
     compute_fingerprint,
     detect_clone_local_env,
@@ -131,6 +133,23 @@ def test_exact_frozen_argv(tmp_path: Path) -> None:
     assert not any("editable" in c for c in cmd)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm launcher")
+def test_npm_cmd_bypasses_batch_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "nodejs"
+    npm = root / "npm.CMD"
+    entry = root / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    node = root / "node.exe"
+    entry.parent.mkdir(parents=True)
+    npm.write_text("@echo off\r\n", encoding="utf-8")
+    entry.write_text("", encoding="utf-8")
+    node.write_bytes(b"")
+    monkeypatch.setattr(
+        "grok_worker.deps.which", lambda name: str(node) if name == "node" else None
+    )
+
+    assert build_npm_sync_cmd(str(npm)) == [str(node), str(entry), *NPM_SYNC_CONTRACT]
+
+
 def test_prepare_uses_exact_frozen_once(tmp_path: Path) -> None:
     source, shared = tmp_path / "src", tmp_path / "shared"
     source.mkdir()
@@ -148,6 +167,58 @@ def test_prepare_uses_exact_frozen_once(tmp_path: Path) -> None:
             env2 = prepare_shared_env(source, shared)
     assert len(calls) == 1
     assert env2["UV_PROJECT_ENVIRONMENT"] == env["UV_PROJECT_ENVIRONMENT"]
+
+
+def test_prepare_installs_locked_nested_npm_project(tmp_path: Path) -> None:
+    source, shared = tmp_path / "src", tmp_path / "shared"
+    project = source / "services" / "runtime-core"
+    project.mkdir(parents=True)
+    (project / "package.json").write_text('{"name":"runtime-core"}\n', encoding="utf-8")
+    (project / "package-lock.json").write_text(
+        '{"name":"runtime-core","lockfileVersion":3,"packages":{}}\n',
+        encoding="utf-8",
+    )
+    decoy = project / "node_modules" / "decoy"
+    decoy.mkdir(parents=True)
+    (decoy / "package.json").write_text('{"name":"decoy"}\n', encoding="utf-8")
+    (decoy / "package-lock.json").write_text(
+        '{"name":"decoy","lockfileVersion":3,"packages":{}}\n',
+        encoding="utf-8",
+    )
+    calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((list(cmd), Path(kwargs["cwd"]), dict(kwargs["env"])))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    with mock.patch("grok_worker.deps.subprocess.run", side_effect=fake_run):
+        with mock.patch("grok_worker.deps.which", return_value="/usr/bin/npm"):
+            env = prepare_shared_env(source, shared)
+            repeated = prepare_shared_env(source, shared)
+
+    assert len(calls) == 1
+    command, cwd, child_env = calls[0]
+    assert command == [
+        "/usr/bin/npm",
+        "ci",
+        "--prefer-offline",
+        "--no-audit",
+        "--no-fund",
+        "--ignore-scripts",
+    ]
+    assert cwd == project.resolve()
+    assert child_env["NPM_CONFIG_CACHE"] == str((shared / "npm").resolve())
+    assert env["GROK_WORKER_NPM_PROJECTS"] == "services/runtime-core"
+    assert repeated == env
+    contract = worker_env_exports(env)
+    assert "Locked npm dependencies are already installed" in contract
+    assert "Dependency preparation is disabled" not in contract
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows venv layout")
@@ -241,9 +312,7 @@ def test_deps_prewarm_failure_warns_and_still_invokes_backend(
     assert outcome.state == "failed"
     assert "deps prepare failed" not in (outcome.message or "")
     assert outcome.artifact_path is not None
-    worker_log = Path(outcome.artifact_path, "worker.log").read_text(
-        encoding="utf-8"
-    )
+    worker_log = Path(outcome.artifact_path, "worker.log").read_text(encoding="utf-8")
     assert "dependency prewarm skipped" in worker_log
 
 

@@ -67,7 +67,9 @@ one-shot and named-session starts sharing a disposable root, or set
 not the independent disposable-byte cap or upstream provider rate limits.
 Clone admission is protected by a short root lock, while worker execution and
 fingerprint-distinct dependency work remain concurrent. Same-fingerprint uv
-preparation is serialized once and then reused by all admitted workers.
+preparation is serialized once and then reused by all admitted workers. Locked
+nested npm projects run `npm ci` in the clone with the shared npm download cache;
+the source checkout's `node_modules` is never copied or linked.
 
 On Windows, the Grok agent launcher uses hidden `STARTUPINFO` window state when
 invoking the configured executable. This keeps `.cmd`-based Grok installations
@@ -565,6 +567,10 @@ share the remaining hard-time budget, stop on first failure, and their observed
 exit codes participate in the existing fail-closed result gate. Final metrics are
 persisted only after this phase and distinguish backend, verification, and total
 duration.
+
+Final gates start at the clone root. A bare task name such as `pytest` or
+`testDebugUnitTest` is rejected before clone creation; use an explicit executable
+command and repository wrapper/working directory instead.
 
 Disable runner-owned JSON Schema result capture (ACP-like disk `result.json`):
 

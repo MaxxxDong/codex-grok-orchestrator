@@ -29,6 +29,7 @@ from grok_worker.native_result import (
 from grok_worker.prompt_cache import TaskManifest, build_one_shot_prompt
 from grok_worker.result_schema import ResultError
 from grok_worker.run_config import RunConfig, build_native_cmd
+from grok_worker.runner import run_worker
 from grok_worker.tool_policy import ToolPolicy, apply_native_tool_flags
 
 
@@ -69,6 +70,23 @@ def test_worker_prompt_hides_runner_owned_final_gates() -> None:
     assert payload["runnerFinalGateCount"] == 2
     assert "finalGates" not in payload
     assert "requiredFailedGates" not in payload
+
+
+@pytest.mark.parametrize("gate", ["testDebugUnitTest", "pytest", "ruff", "mypy"])
+def test_execution_contract_rejects_bare_final_gate(gate: str) -> None:
+    contract = ExecutionContract.from_mapping({"finalGates": [gate]})
+    with pytest.raises(ExecutionContractError, match="executable command"):
+        contract.validate_runner_gates()
+
+
+def test_runner_rejects_bare_gate_before_source_or_backend(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        source=tmp_path / "missing-source",
+        prompt="must never reach a backend",
+        execution=ExecutionContract.from_mapping({"finalGates": ["pytest"]}),
+    )
+    with pytest.raises(ExecutionContractError, match="executable command"):
+        run_worker(cfg)
 
 
 def test_subtasks_hard_cap_and_readonly() -> None:
