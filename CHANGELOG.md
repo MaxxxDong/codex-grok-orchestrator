@@ -4,8 +4,42 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
-## [0.5.3] - 2026-07-19
+## [0.6.0] - 2026-07-20
 
+### Added
+
+- `grok-worker run --detach` starts the existing one-shot lifecycle in a
+  detached child and immediately returns a structured launch receipt.
+- The hidden detached-child entry accepts one validated `RunConfig` payload and
+  reuses the same lifecycle, reasoning, artifact, retention, and cleanup code as
+  foreground execution.
+
+### Changed
+
+- Codex dispatch guidance now uses detached launch plus event-first `watch`
+  instead of keeping a foreground shell open for frequent status polling.
+- Detached launcher logs are private `launch-logs` entries governed by the
+  shared cache's existing quota and TTL/LRU cleanup.
+- Cache accounting includes detached launcher logs, preserving bounded cleanup
+  across parallel workers.
+- Recognizable live provider HTTP/auth/rate-limit/unavailable failures and ignored
+  reasoning effort now emit one immediate, non-sensitive `attention` event while
+  the Worker remains free to recover. Final failure summaries scan bounded head
+  and tail windows so a late provider error is not hidden by missing result JSON.
+- Public release surfaces and CI tests now enforce one coherent package version
+  across runtime metadata, lockfile, installation commands, operations,
+  changelog, and release notes.
+
+### Verification
+
+- Full suite: 260 tests passed; Ruff and strict mypy passed.
+- Offline lock resolution, sdist/wheel build, clean-wheel version/resource/help
+  smoke, and source-launcher version smoke passed.
+- A live provider-500 canary returned its detached receipt in 0.144 seconds,
+  emitted `running/attention` before terminal failure, then produced bounded
+  terminal/settled events and a provider-specific final summary.
+
+## [0.5.3] - 2026-07-19
 ### Added
 
 - `grok-worker watch`: event-first waits with immediate terminal/attention wakeup

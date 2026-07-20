@@ -7,6 +7,51 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-20 — Detached event-first orchestration / 分离启动与事件优先编排
+
+**Version:** `grok-worker` 0.6.0
+
+Codex-dispatched one-shot work now uses `grok-worker run --detach`. The command
+returns a structured launch receipt immediately, while the detached child reuses
+the same native or ACP execution lifecycle, explicit reasoning checks,
+three-file artifact contract, retention, and guarded cleanup as foreground
+`run`. Dispatchers then wait with `watch`: terminal, settled, or attention
+events wake immediately, and a compact 300-second heartbeat remains the fallback.
+
+Detached launcher logs are private shared-cache entries covered by the existing
+quota and TTL/LRU cleanup. Parallel workers remain isolated by run ID and
+dispatcher capacity. Version consistency tests now keep package metadata,
+runtime `--version`, lockfile, install commands, upgrade documentation,
+changelog, and release notes synchronized.
+
+Recognizable live provider failures and ignored reasoning effort now emit one
+non-sensitive `attention` event within the 2-second lease poll interval. This
+wakes `watch` without killing a Worker that may still recover; terminal and
+settled events remain authoritative for the final outcome. Late provider errors
+also remain visible in bounded final failure summaries.
+
+由 Codex 调度的一次性任务现在默认使用 `grok-worker run --detach`。命令会立即
+返回结构化启动回执，分离子进程仍复用前台 `run` 的原生或 ACP 执行链、显式
+推理强度检查、三文件制品、失败保留与安全清理。调度器随后使用 `watch`：
+终态、清理完成或需介入事件会立即唤醒，只有没有事件时才返回 300 秒一次的
+精简健康心跳。
+
+分离启动日志属于受共享缓存配额与 TTL/LRU 管理的私有条目；并行 Worker 继续
+按 run ID 和 dispatcher 容量隔离。新增版本一致性测试，确保包元数据、运行时
+版本、锁文件、安装命令、升级文档、变更记录和发布说明不再发生版本漂移。
+
+可识别的运行中 provider 故障或推理强度被忽略时，会在 2 秒 lease 检查周期内
+发出一次不含错误正文的 `attention`。它会立即唤醒 `watch`，但不会杀掉仍可能
+恢复的 Worker；最终结果仍由后续 terminal/settled 事件决定。
+
+Release verification: 260-test pytest suite, Ruff, strict mypy, offline lock
+resolution, sdist/wheel build, clean-wheel version/resource/help smoke, and
+source-launcher version smoke. A live provider-500 canary returned a detached
+receipt in 0.144 seconds, emitted `running/attention` before terminal failure,
+and preserved terminal/settled cleanup plus a provider-specific final summary.
+
+---
+
 ## 2026-07-19 — Immediate lifecycle signals and simpler preflight / 即时通知与简化预检
 
 **Version:** `grok-worker` 0.5.3

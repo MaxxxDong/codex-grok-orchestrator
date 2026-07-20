@@ -11,6 +11,11 @@ Use only the lifecycle entry point `bin/grok-worker`. One-shot `run` defaults to
 the managed ACP path on Windows and native Grok Build headless elsewhere. Do not invoke raw `grok`, `acpx`, or
 `grok-acp-worker` for repository work outside lifecycle diagnosis.
 
+For Codex-dispatched one-shot work, `run --detach` is the default launch path.
+It returns a receipt immediately; observe the `run_id` with `watch`, not an open
+terminal session. Do not use repeated `write_stdin` polling. Foreground `run`
+remains available only for direct interactive use and launcher diagnosis.
+
 ## Runtime defaults
 
 - Model comes from `GROK_WORKER_MODEL` and defaults to `grok-4.5`.
@@ -135,6 +140,7 @@ One-shot implementation:
 
 ```bash
 grok-worker run \
+  --detach \
   --source "$REPO" \
   --backend native \
   --run-id "$GROK_WORKER_RUN_ID" \
@@ -149,6 +155,7 @@ One-shot read-only analysis/review:
 
 ```bash
 grok-worker run \
+  --detach \
   --source "$REPO" \
   --backend native \
   --run-id "$GROK_WORKER_RUN_ID" \
@@ -166,6 +173,7 @@ Prompt-only research before a repository exists:
 
 ```bash
 grok-worker run \
+  --detach \
   --prompt-only \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
   --mode research \
@@ -225,6 +233,12 @@ grok-worker cache-gc
 grok-worker list-legacy --disposable-root "$DISPOSABLE_ROOT"
 ```
 
+The start receipt is launch acceptance, not task success. After it returns, call
+`watch` with the receipt's `run_id`; carry `next_cursor` into each subsequent
+call. A 300-second heartbeat is the only routine fallback. For parallel work,
+use one dispatcher-scoped watch for the whole wave rather than one terminal or
+watcher per Worker.
+
 See [docs/operations.md](docs/operations.md) for completion events, status summary
 fields, config-apply rollback semantics, and authority boundaries.
 
@@ -276,7 +290,7 @@ Resolution order:
 3. macOS `~/Library/Caches/grok-worker`
 4. Linux `~/.cache/grok-worker`
 
-The cache is outside the disposable root and has its own default 10 GiB quota and 90-day TTL/LRU policy. Buckets include `context-packs`, `venvs`, `uv`, `pip`, `npm`, `poetry`, and `metrics`.
+The cache is outside the disposable root and has its own default 10 GiB quota and 90-day TTL/LRU policy. Buckets include `context-packs`, `venvs`, `uv`, `pip`, `npm`, `poetry`, `metrics`, and detached `launch-logs`.
 
 Workers hold a shared cache-use lease. Cache GC requires an exclusive nonblocking lease and defers while any worker is using cache entries. If TTL then LRU cannot reduce usage below quota, new workers are refused before clone creation.
 
@@ -322,10 +336,19 @@ reasoning downgrade, and unverifiable implementation results are failures.
   event. Only on timeout does it return one compact health heartbeat. Preserve
   `next_cursor` between calls. For a parallel wave, one dispatcher-scoped watch
   replaces per-worker status polling.
+- **Codex tool-use rule**: launch one-shots with `run --detach`, then make one
+  bounded `watch --wait-seconds 300` call at a time. Never keep the launch shell
+  alive for 10/30-second `write_stdin` checks. A watcher returning early means a
+  real event arrived; an unchanged heartbeat does not justify reading full logs.
 - **Handoff rule**: on `terminal/success`, inspect the artifact and then watch
   from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
   and the bounded log tail. An unchanged heartbeat needs no full log read and no
   user-facing narration.
+- **Live backend attention**: a recognized provider HTTP/auth/rate-limit/
+  unavailable failure or ignored reasoning effort emits one non-sensitive
+  `running/attention` pointer within the lease poll interval. It wakes `watch`
+  but does not kill a Worker that may recover. Preserve the returned cursor and
+  decide whether to keep waiting from lifecycle plus a bounded log tail.
 - **Health checks**: `health` remains a diagnostic-only read-only fallback. It reports lifecycle,
   bounded non-symlink workspace activity, fixed progress step, result/artifact
   readiness, process identity, CPU/RSS, and timeout remaining, but never kills,

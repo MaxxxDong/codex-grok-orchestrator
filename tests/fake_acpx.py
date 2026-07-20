@@ -20,6 +20,9 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
         from pathlib import Path
 
         behavior = os.environ.get("FAKE_ACPX_BEHAVIOR", {behavior!r})
+        delay = float(os.environ.get("FAKE_ACPX_DELAY_SECONDS", "0"))
+        if delay > 0:
+            time.sleep(delay)
         if os.environ.get("GROK_WORKER_LIFECYCLE") != "1":
             print("missing lifecycle environment", file=sys.stderr)
             sys.exit(92)
@@ -99,6 +102,24 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
                 verification=[],
             )
             print("fake analysis")
+            sys.exit(0)
+        if behavior == "provider_500_then_success":
+            print(
+                "responses API error status=500 Internal Server Error model_id=test",
+                flush=True,
+            )
+            time.sleep(
+                float(os.environ.get("FAKE_PROVIDER_RECOVERY_DELAY_SECONDS", "4"))
+            )
+            write_result(
+                schema_version=1,
+                task_completed=True,
+                status="completed",
+                summary="recovered after provider error",
+                findings=[],
+                verification=[],
+            )
+            print("provider recovered")
             sys.exit(0)
         if behavior == "success_review_findings":
             (out / "verification" / "tests.txt").write_text("ok\\n", encoding="utf-8")

@@ -1,11 +1,22 @@
-# Windows native upgrade: 0.3-0.5.2 to 0.5.3
+# Windows native upgrade: 0.3-0.5.3 to 0.6.0
 
 This integration branch supports native Windows 10/11. It does not use WSL as
 the default or as a fallback. The canonical source checkout, installed Windows
 executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
 the only active runtime chain.
 
-## What changes in 0.5.3
+## What changes in 0.6.0
+
+- Codex dispatchers launch one-shot work with `run --detach`, receive a
+  structured receipt immediately, and wait through `watch` instead of keeping a
+  foreground shell open.
+- Detached execution reuses the same lifecycle, High-reasoning checks, cache
+  profile, three-file artifacts, failure retention, and cleanup as foreground
+  execution.
+- Detached launcher logs are covered by the existing shared-cache quota and
+  TTL/LRU cleanup.
+
+## Changes retained from 0.5.3 and earlier
 
 - `grok-worker watch` wakes immediately for terminal or attention events and
   retains a compact 300-second health heartbeat as fallback.
@@ -16,25 +27,32 @@ the only active runtime chain.
 - The 0.5.2 native Grok, cache, session-cleanup, plugin/MCP, and High-reasoning
   behavior remains unchanged.
 
-## Changes inherited from 0.5.2
-
-- One-shot `grok-worker run` defaults to Native Headless on Windows after real
-  terminal and file-tool verification with Grok Build 0.2.103. Managed ACP
-  remains the explicit compatibility path and named-session transport.
-- Named sessions also use the managed acpx runtime.
-- Native runs now use the normal Windows `%USERPROFILE%\.grok` state, pass model
-  and High effort explicitly, and reject reasoning downgrade warnings.
-- Native plugin/MCP inspection is advisory; repository `.mcp.json` remains
-  visible. One-shot Native adds `--no-memory` and removes only the session bucket
-  keyed by the disposable clone after completion.
-- Safe staged, unstaged, and untracked files are snapshotted automatically.
-- Retained task-ID collisions allocate a fresh clone, transient clone failures
-  receive one clean retry, and dependency prewarm failures become warnings.
-- Native token/cache/reasoning metrics, backend/process health, writable
-  clone-local tool caches, and `grok-worker --version` are available.
-- The source launcher recovers from an unwritable default cache, while explicit
-  unsafe cache paths still fail closed. Dependency-disabled tasks explicitly
-  forbid uv/pip environment creation.
+- One-shot `grok-worker run` defaults to native headless and no longer requires
+  `acpx`.
+- `--backend acp` and named sessions remain available and still require `acpx`.
+- Windows terminal and file tools are verified with Grok Build 0.2.103. The
+  managed acpx runtime remains the only ACP compatibility path; there is no
+  global-acpx or WSL fallback.
+- Workers use the native Grok home, so configured plugins, MCP servers, OAuth,
+  stable-channel metadata, explicit High reasoning, and prompt-cache behavior
+  remain available.
+- Project-local `.uv-cache` and launcher fallback prevent sandbox-denied writes
+  to the host UV cache before the Worker starts.
+- The launcher prefers its installed virtual environment, so normal starts do not
+  require package-network access. Clone-owned Grok sessions are removed on exit.
+- Repository `.mcp.json` remains visible; extension diagnostics do not block launch.
+- Ordinary staged, unstaged, and untracked files are snapshotted automatically.
+  Ignored files stay excluded; suspected secrets and escaping symlinks still
+  fail closed.
+- Dependency prewarm failure becomes a visible warning. Task verification still
+  decides success.
+- A retained task-ID collision gets a fresh suffixed clone instead of blocking
+  startup.
+- Completion events, activity-renewed leases, verified three-file artifacts,
+  capacity limits, and guarded cleanup remain in force.
+- Native token/cache/reasoning metrics, hidden child processes, Win32
+  process-tree cleanup, PowerShell 7/UTF-8 routing, and adaptive cmd decoding
+  remain part of the Windows integration.
 - Sensitive files, escaping symlinks/reparse points, artifact verification, and
   cleanup ownership remain hard gates.
 
@@ -55,7 +73,7 @@ the only active runtime chain.
    managed acpx status, and a hash of the Grok config.
 2. Back up the full canonical repository (including `.git` and dirty files) and
    the installed uv tool plus both executables.
-3. Fetch and verify the annotated `v0.5.3` tag and Release.
+3. Fetch and verify the annotated `v0.6.0` tag and Release.
 4. Merge or port the upstream tag into an isolated worktree based on the
    existing Windows-native branch. Do not replace the Windows branch with a
    plain tag checkout.

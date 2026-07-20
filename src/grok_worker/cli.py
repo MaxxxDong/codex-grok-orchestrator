@@ -17,6 +17,7 @@ app = typer.Typer(
 )
 
 app.command("run")(cli_cmds.cmd_run)
+app.command("_run-detached", hidden=True)(cli_cmds.cmd_run_detached_child)
 app.command("preflight")(cli_cmds.cmd_preflight)
 app.command("gc")(cli_cmds.cmd_gc)
 app.command("status")(cli_cmds.cmd_status)
