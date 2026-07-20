@@ -92,7 +92,10 @@ def _as_result_dict(payload: object) -> dict[str, object] | None:
     }
     if keys.issubset(payload.keys()):
         return {str(k): v for k, v in payload.items()}
-    for nest_key in ("result", "structured_output", "output", "data"):
+    # Grok Build's JSON envelope uses camelCase structuredOutput. Prefer that
+    # constrained object over the free-form text field, which may contain
+    # progress-shaped JSON before the final completed result.
+    for nest_key in ("result", "structuredOutput", "structured_output", "output", "data"):
         nested = payload.get(nest_key)
         if isinstance(nested, dict) and keys.issubset(nested.keys()):
             return {str(k): v for k, v in nested.items()}

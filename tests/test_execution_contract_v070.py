@@ -176,6 +176,33 @@ def test_native_result_extract_and_persist(tmp_path: Path) -> None:
         extract_structured_result_from_text("not json at all")
 
 
+def test_native_result_prefers_grok_structured_output_over_progress_json() -> None:
+    partial = {
+        "schema_version": 1,
+        "task_completed": False,
+        "status": "partial",
+        "summary": "work in progress",
+        "findings": [],
+        "verification": [],
+    }
+    completed = {
+        "schema_version": 1,
+        "task_completed": True,
+        "status": "completed",
+        "summary": "done",
+        "findings": [],
+        "verification": [],
+    }
+    envelope = json.dumps(
+        {
+            "text": json.dumps(partial) + json.dumps(completed),
+            "structuredOutput": completed,
+        }
+    )
+
+    assert extract_structured_result_from_text(envelope) == completed
+
+
 def test_continuation_ttl_and_contract_mismatch(tmp_path: Path) -> None:
     clone = tmp_path / "clone"
     clone.mkdir()
