@@ -185,13 +185,16 @@ grok-worker watch \
   --run-id "$RUN_ID" \
   --after "$CURSOR" \
   --wait-seconds 300 \
+  --until-settled \
   --json
 ```
 
-The command returns immediately with `kind=events` when a matching terminal,
-settled, or attention event appears. Otherwise it returns one `kind=heartbeat`
-snapshot after the bounded wait. Feed `next_cursor` into the next call. One
-dispatcher-scoped watch can cover a parallel wave. This command never reads full
+For one `run_id`, `--until-settled` keeps the same event wait through terminal and
+cleanup settlement; a running attention event still returns immediately. Without
+that flag, the command returns on the first matching terminal, settled, or
+attention event. Otherwise it returns one `kind=heartbeat` snapshot after the
+bounded wait. Feed `next_cursor` into the next call. One dispatcher-scoped watch
+without `--until-settled` can cover a parallel wave. This command never reads full
 logs and never mutates, restarts, or cleans workers.
 
 Exact duplicate attention events are suppressed per run and reason code. A
@@ -221,10 +224,10 @@ emits one `running/attention` event containing only a reason code. It does not
 terminate the process: Grok may recover, and a later terminal/settled event still
 defines the outcome. Plugin-level MCP warnings do not match this classifier.
 
-On `terminal/success`, consume the verified artifact and wait once more for
-`settled`. On failure or `attention_required=true`, inspect authoritative
-lifecycle and only then a bounded log tail. Do not repeatedly read unchanged
-status/log output between heartbeats.
+With `--until-settled`, consume the verified artifact only when the response says
+`settled=true`. On a running attention event, inspect authoritative lifecycle and
+only then a bounded log tail. Do not repeatedly read unchanged status/log output
+between heartbeats.
 
 ## 1b. Per-dispatcher concurrency (OS flock slot leases)
 
@@ -519,7 +522,6 @@ grok-worker run --detach \
   --execution-manifest ./examples/task-manifest.json \
   --disable-web-search \
   --disallowed-tool WebSearch \
-  --max-turns 80 \
   --stall-turns 8 \
   --stall-seconds 900
 ```
@@ -541,6 +543,15 @@ grok-worker run --source "$REPO" --mode implementation \
 grok-worker run --source "$REPO" --mode implementation \
   --task-id my-task --prompt-file ./finalize.md --continue
 ```
+
+Native budget exhaustion (`max_tokens_truncation` or `max_turns_reached`) uses the
+same mechanism automatically inside one lifecycle. It does not synthesize success:
+the continued turn must still produce a valid result and real verification.
+
+When `execution.finalGates` is nonempty, the runner executes each exact gate in
+the worker clone after native structured output and stores atomic
+`.grok-output/verification/runner-gate-*` logs. The observed exit codes replace
+same-command model claims and participate in the existing fail-closed result gate.
 
 Disable runner-owned JSON Schema result capture (ACP-like disk `result.json`):
 

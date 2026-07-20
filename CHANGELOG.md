@@ -4,6 +4,27 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the public `max_turns` / `--max-turns` capability end to end. Native
+  workers now rely on the renewable inactivity lease and absolute hard timeout,
+  and detached receipts/lifecycle metadata record the effective non-sensitive
+  execution policy.
+- Native `max_tokens_truncation` and `max_turns_reached` failures now trigger
+  automatic same-session continuation inside the same lifecycle. If recovery
+  cannot finish, the primary budget error remains visible and the retained clone
+  carries compatible continuation metadata.
+- Added `watch --until-settled` so one per-run wait consumes `terminal` and waits
+  through clone/session cleanup without a second caller-managed watch command.
+- Explicit execution-contract `finalGates` are now executed by the runner, which
+  atomically records authoritative verification logs and replaces same-command
+  model claims with the observed exit code.
+
+### Fixed
+
+- Preserve backend/provider failures as the primary lifecycle error when missing
+  structured output or artifact finalization is a secondary consequence.
+
 ## [0.7.2] - 2026-07-20
 
 ### Fixed
@@ -61,7 +82,7 @@ All notable public changes are recorded here. The project follows semantic versi
 - Continuation metadata is now written only after semantic success, and its
   compatibility hash includes the bounded execution contract.
 - **Task-scoped tool policy** (native flags only): `--disable-web-search`,
-  `--disallowed-tool` (repeatable), `--max-turns`. Effective tool signature is
+  `--disallowed-tool` (repeatable). Effective tool signature is
   part of continuation compatibility. User plugins/MCP remain available by
   default.
 - **Native JSON Schema final-result capture**: implementation native runs pass
@@ -79,7 +100,7 @@ All notable public changes are recorded here. The project follows semantic versi
   applied (Grok sessions key by physical path). Do not claim provider cache
   hits without A/B evidence.
 - CLI: `--execution-manifest`, `--continue`, `--write-continuation`,
-  `--disable-web-search`, `--disallowed-tool`, `--max-turns`, `--stall-turns`,
+  `--disable-web-search`, `--disallowed-tool`, `--stall-turns`,
   `--stall-seconds`, `--no-native-json-schema`.
 
 ### Changed

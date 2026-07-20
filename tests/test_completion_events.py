@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from grok_worker.cli import main
-from grok_worker.completion_events import list_completion_events
+from grok_worker.completion_events import emit_completion_event, list_completion_events
 from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
 from grok_worker.gc import convert_dead_worker
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -675,6 +675,83 @@ def test_watch_unblocks_on_delayed_attention_event(
     assert payload["events"][0]["emitted_at"].startswith("20")
     assert payload["events"][0]["watch_delivery_latency_seconds"] < 1.0
     assert elapsed < 1.5
+
+
+def test_watch_until_settled_keeps_one_wait_through_terminal_cleanup(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import threading
+    import time
+
+    shared = tmp_roots["shared"]
+
+    def delayed_emit() -> None:
+        time.sleep(0.1)
+        emit_completion_event(
+            task_id="watch-settle",
+            state="success",
+            run_id="watch-run-settle",
+            kind="terminal",
+            shared_cache_root=shared,
+        )
+        time.sleep(0.1)
+        emit_completion_event(
+            task_id="watch-settle",
+            state="success",
+            run_id="watch-run-settle",
+            kind="settled",
+            clone_cleaned=True,
+            session_cleaned=True,
+            shared_cache_root=shared,
+        )
+
+    thread = threading.Thread(target=delayed_emit, daemon=True)
+    thread.start()
+    code = main(
+        [
+            "watch",
+            "--shared-cache-root",
+            str(shared),
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--run-id",
+            "watch-run-settle",
+            "--wait-seconds",
+            "2",
+            "--until-settled",
+            "--json",
+        ]
+    )
+    thread.join(timeout=2)
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["settled"] is True
+    assert [event["kind"] for event in payload["events"]] == ["terminal", "settled"]
+
+
+def test_watch_until_settled_requires_one_run(
+    tmp_roots: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(
+        [
+            "watch",
+            "--shared-cache-root",
+            str(tmp_roots["shared"]),
+            "--disposable-root",
+            str(tmp_roots["disposable"]),
+            "--dispatcher-id",
+            "wave",
+            "--until-settled",
+            "--wait-seconds",
+            "0",
+        ]
+    )
+
+    assert code == 2
+    assert "requires --run-id" in capsys.readouterr().err
 
 
 def test_watch_timeout_returns_compact_healthy_heartbeat(

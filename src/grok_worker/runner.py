@@ -135,8 +135,13 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta = WorkerMeta.read(meta_path(clone))
                 if meta.managed_by != MANAGED_BY or meta.task_id != task_id:
                     raise CloneError("continuation lifecycle identity mismatch")
-                if meta.state != WorkerState.KEEP:
-                    raise CloneError(f"continuation requires retained keep state, got {meta.state}")
+                if meta.state != WorkerState.KEEP and not (
+                    meta.state == WorkerState.FAILED and meta.continuation_ready
+                ):
+                    raise CloneError(
+                        "continuation requires retained keep or recoverable state, "
+                        f"got {meta.state}"
+                    )
                 if meta.source_realpath != source_realpath:
                     raise CloneError("continuation source does not match retained clone")
                 assert_continuation_usable(
@@ -171,6 +176,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta.dispatcher_id = cfg.dispatcher_id
                 meta.mode = mode
                 meta.backend = cfg.backend
+                meta.effective_run = cfg.effective_run_policy()
                 meta.timeout_seconds = int(cfg.timeout)
                 meta.keep_reason = None
                 meta.retention_deadline = None
@@ -180,6 +186,8 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta.result_status = None
                 meta.acpx_exit_code = None
                 meta.error_message = None
+                meta.failure_kind = None
+                meta.continuation_ready = False
                 meta.interrupted = False
                 meta.runner_pid = None
                 meta.runner_start_token = None
@@ -243,6 +251,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                     mode=mode,
                     backend=cfg.backend,
                     disclosure_summary=disc_dict,
+                    effective_run=cfg.effective_run_policy(),
                 )
                 meta.write(meta_path(clone))
 

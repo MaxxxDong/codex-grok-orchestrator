@@ -24,7 +24,7 @@ the only active runtime chain.
   automatic 24-hour bounded keep; not routed through ACP.
 - Runner-owned native JSON Schema final-result capture; ACP still writes
   `result.json` on disk.
-- Opt-in `--disable-web-search`, `--disallowed-tool`, `--max-turns`.
+- Opt-in `--disable-web-search` and `--disallowed-tool`; no model-turn cap is exposed.
 - Productive-progress attention (`--stall-turns` / `--stall-seconds`).
 - Stable prompt fingerprints and honest cache A/B metric fields.
 

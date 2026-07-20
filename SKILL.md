@@ -267,7 +267,7 @@ grok-worker events --shared-cache-root "$CACHE" --after "" \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" --wait-seconds 30 --json
 grok-worker watch --shared-cache-root "$CACHE" \
   --disposable-root "$DISPOSABLE_ROOT" --run-id "$GROK_WORKER_RUN_ID" \
-  --after "" --wait-seconds 300 --json
+  --after "" --wait-seconds 300 --until-settled --json
 grok-worker preflight --source "$REPO" --json
 grok-worker config-apply \
   --config "$CONFIG" --candidate "$CANDIDATE" \
@@ -279,7 +279,7 @@ grok-worker list-legacy --disposable-root "$DISPOSABLE_ROOT"
 ```
 
 The start receipt is launch acceptance, not task success. After it returns, call
-`watch` with the receipt's `run_id`; carry `next_cursor` into each subsequent
+`watch --until-settled` with the receipt's `run_id`; carry `next_cursor` into each subsequent
 call. If the Codex terminal tool yields a `session_id` while that `watch` process
 is still running, resume that exact terminal session with a blocking empty
 `write_stdin`/wait until the command exits. Tool-level yields may require another
@@ -297,7 +297,7 @@ Optional one-shot controls:
 - `--backend native|acp`: native is the one-shot default; ACP is the compatibility and named-session transport and requires `acpx`.
 - `--execution-manifest PATH`: bounded targets/checks/risk tags/subtasks (dynamic suffix).
 - `--continue` / `--write-continuation`: native same-task continuation. The writer automatically keeps the clone with a 24-hour TTL; final `--continue` without another writer flag closes and cleans it.
-- `--disable-web-search`, `--disallowed-tool NAME` (repeatable), `--max-turns N`: opt-in pure-code tool policy via native Grok flags (plugins/MCP stay available by default).
+- `--disable-web-search`, `--disallowed-tool NAME` (repeatable): opt-in pure-code tool policy via native Grok flags (plugins/MCP stay available by default). The runner intentionally exposes no model-turn cap; inactivity and the absolute safety cap govern runaway work.
 - `--stall-turns N`, `--stall-seconds S`: productive-progress attention thresholds (never kill solely for stall).
 - `--no-native-json-schema`: disable runner-owned JSON Schema result capture (ACP-like disk `result.json`).
 - `--keep "REASON"`: explicit indefinite clone retention.
@@ -382,6 +382,18 @@ empty verification list. Missing/empty analysis output, partial/failed results,
 malformed structured output, reasoning downgrade, and unverifiable
 implementation results are failures.
 
+Native `max_tokens_truncation` or `max_turns_reached` triggers automatic
+same-session continuation inside the same lifecycle, bounded only by the
+renewable inactivity lease and absolute hard timeout. If recovery still cannot
+finish, the run remains failed, the exact clone/session gets compatible
+continuation metadata, and the budget error remains the primary lifecycle cause;
+a missing structured result is only a secondary contract consequence.
+
+When an execution manifest supplies `finalGates`, the runner executes those exact
+commands after native structured output, writes atomic `runner-gate-*` evidence,
+and uses the observed exit codes. Model-authored verification logs remain valid
+for other checks, but cannot override runner-owned final-gate evidence.
+
 ### Lifecycle / observability
 
 - **Authority**: `.grok-worker/lifecycle.json` is the only state source. Shared-cache
@@ -391,23 +403,25 @@ implementation results are failures.
   after CLI configuration emit `attention`. Events are deduplicated by
   `(run_id, state, kind)` and never carry prompts, tokens, env, file contents, or
   agent output. Emit is best-effort; lifecycle remains authoritative.
-- **Default waiting**: call `grok-worker watch` with an explicit `run_id` or
-  `dispatcher_id`. It long-polls up to 300 seconds and returns immediately on an
-  event. Only on timeout does it return one compact health heartbeat. Preserve
-  `next_cursor` between calls. For a parallel wave, one dispatcher-scoped watch
-  replaces per-worker status polling.
+- **Default waiting**: for one run, call `grok-worker watch --until-settled` with
+  its explicit `run_id`; it consumes `terminal` and waits through cleanup for
+  `settled` in the same command. For a parallel wave, use one dispatcher-scoped
+  `watch` without `--until-settled`. A watch long-polls up to 300 seconds and only
+  returns one compact health heartbeat on timeout. Preserve `next_cursor` between
+  calls.
 - **Codex tool-use rule**: launch one-shots with `run --detach`, then make one
-  bounded `watch --wait-seconds 300` call at a time. Never keep the launch shell
+  bounded `watch --until-settled --wait-seconds 300` call at a time. Never keep the launch shell
   alive for 10/30-second `write_stdin` checks. When the terminal tool yields a
   live `session_id` for the blocking watch, continue that same session with an
   empty blocking `write_stdin`/wait until it exits; abandoning it loses the
   immediate wakeup. Repeated tool-level yields on that same process are not
   health polling. A watcher returning early means a
   real event arrived; an unchanged heartbeat does not justify reading full logs.
-- **Handoff rule**: on `terminal/success`, inspect the artifact and then watch
-  from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
-  and the bounded log tail. An unchanged heartbeat needs no full log read and no
-  user-facing narration.
+- **Handoff rule**: a per-run `--until-settled` response is ready for artifact
+  inspection only when `settled=true`. A running `attention` returns immediately;
+  inspect lifecycle and the bounded log tail, then resume from `next_cursor` if
+  appropriate. An unchanged heartbeat needs no full log read and no user-facing
+  narration.
 - **Live backend attention**: a recognized provider HTTP/auth/rate-limit/
   unavailable failure or ignored reasoning effort emits one non-sensitive
   `running/attention` pointer within the lease poll interval. It wakes `watch`

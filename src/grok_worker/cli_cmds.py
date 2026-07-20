@@ -214,11 +214,6 @@ def cmd_run(
         "--disallowed-tool",
         help="Built-in tool name to deny (repeatable); mapped to native --disallowed-tools",
     ),
-    max_turns: int | None = typer.Option(
-        None,
-        "--max-turns",
-        help="Optional native Grok max agent turns (pathological-loop guard)",
-    ),
     continue_task: bool = typer.Option(
         False,
         "--continue",
@@ -326,9 +321,6 @@ def cmd_run(
             err=True,
         )
         raise typer.Exit(2)
-    if max_turns is not None and max_turns < 1:
-        typer.echo("--max-turns must be >= 1", err=True)
-        raise typer.Exit(2)
     execution = None
     if execution_manifest is not None:
         from grok_worker.execution_contract import (
@@ -392,7 +384,6 @@ def cmd_run(
         cache_ttl_hours=cache_ttl_hours,
         disable_web_search=disable_web_search,
         disallowed_tools=list(disallowed_tool or []),
-        max_turns=max_turns,
         continue_task=continue_task,
         write_continuation=write_continuation,
         execution=execution,
@@ -672,6 +663,11 @@ def cmd_watch(
     dispatcher_id: str | None = typer.Option(
         None, "--dispatcher-id", help="Watch all runs for one dispatcher"
     ),
+    until_settled: bool = typer.Option(
+        False,
+        "--until-settled",
+        help="For one --run-id, keep the same event wait through cleanup settlement",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Wait for completion/attention; return compact health only on timeout."""
@@ -684,6 +680,7 @@ def cmd_watch(
             wait_seconds=float(wait_seconds),
             run_id=run_id,
             dispatcher_id=disp_id,
+            until_settled=until_settled,
         )
     except (EventWaitError, ValueError) as exc:
         typer.echo(str(exc), err=True)

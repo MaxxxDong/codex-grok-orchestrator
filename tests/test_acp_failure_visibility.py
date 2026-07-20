@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from grok_worker.finalize import (
+    classify_backend_failure,
     classify_live_backend_attention,
     summarize_acp_failure,
     summarize_backend_failure,
@@ -85,6 +86,9 @@ def test_runtime_internal_error_visible_with_missing_structured_result(
     assert meta.error_message is not None
     assert "missing structured result" in meta.error_message
     assert "RUNTIME Internal error" in meta.error_message
+    assert meta.error_message.index("upstream ACP failure") < meta.error_message.index(
+        "secondary result contract failure"
+    )
 
     art = Path(outcome.artifact_path or "")  # type: ignore[attr-defined]
     worker = json.loads((art / "worker.log").read_text(encoding="utf-8"))
@@ -92,3 +96,20 @@ def test_runtime_internal_error_visible_with_missing_structured_result(
     assert "missing structured result" in worker["lifecycle"]["error_message"]
     assert "RUNTIME Internal error" in worker["lifecycle"]["error_message"]
     assert "[acpx] error: RUNTIME Internal error" in worker["agent_output"]
+
+
+def test_native_budget_failures_are_primary_and_continuation_safe() -> None:
+    truncated = classify_backend_failure(
+        '{"type":"error","message":"Internal error: response truncated by max_tokens",'
+        '"error_kind":"max_tokens_truncation"}\n'
+    )
+    turns = classify_backend_failure(
+        '{"type":"max_turns_reached"}\nError: max turns reached\n'
+    )
+
+    assert truncated is not None
+    assert truncated.kind == "max_tokens_truncation"
+    assert truncated.continuation_safe is True
+    assert turns is not None
+    assert turns.kind == "max_turns_reached"
+    assert turns.continuation_safe is True

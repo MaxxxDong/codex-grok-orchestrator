@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from grok_worker.completion_events import list_completion_events
@@ -81,26 +82,44 @@ def watch_workers(
     wait_seconds: float,
     run_id: str | None = None,
     dispatcher_id: str | None = None,
+    until_settled: bool = False,
 ) -> dict[str, Any]:
-    """Wait for an event, otherwise return one compact read-only health snapshot."""
+    """Wait for events, optionally carrying one run through cleanup settlement."""
     if not run_id and not dispatcher_id:
         raise ValueError("watch requires --run-id or --dispatcher-id")
+    if until_settled and not run_id:
+        raise ValueError("--until-settled requires --run-id")
 
-    events = list_completion_events(
-        shared_cache_root=shared_cache_root,
-        after=after,
-        wait_seconds=wait_seconds,
-        run_id=run_id,
-        dispatcher_id=dispatcher_id,
-    )
-    if events:
-        delivered = [_with_delivery_latency(item) for item in events]
+    cursor = after
+    deadline = monotonic() + max(0.0, wait_seconds)
+    delivered: list[dict[str, Any]] = []
+    while True:
+        remaining = max(0.0, deadline - monotonic())
+        events = list_completion_events(
+            shared_cache_root=shared_cache_root,
+            after=cursor,
+            wait_seconds=remaining,
+            run_id=run_id,
+            dispatcher_id=dispatcher_id,
+        )
+        if not events:
+            break
+        batch = [_with_delivery_latency(item) for item in events]
+        delivered.extend(batch)
+        cursor = str(batch[-1].get("event_id") or cursor)
+        settled = any(item.get("kind") == "settled" for item in batch)
+        live_attention = any(item.get("kind") == "attention" for item in batch)
+        if not until_settled or settled or live_attention or monotonic() >= deadline:
+            break
+
+    if delivered:
         return {
             "kind": "events",
             "events": delivered,
             "count": len(delivered),
-            "next_cursor": str(delivered[-1].get("event_id") or after),
+            "next_cursor": cursor,
             "attention_required": any(_event_needs_attention(item) for item in delivered),
+            "settled": any(item.get("kind") == "settled" for item in delivered),
         }
 
     report = collect_health(disposable_root, dispatcher_id=dispatcher_id)
@@ -120,7 +139,7 @@ def watch_workers(
         "kind": "heartbeat",
         "events": [],
         "count": 0,
-        "next_cursor": after,
+        "next_cursor": cursor,
         "attention_required": attention,
         "reason_code": reason_code,
         "workers": compact,

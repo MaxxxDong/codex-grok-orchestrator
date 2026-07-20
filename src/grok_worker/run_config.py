@@ -61,7 +61,6 @@ class RunConfig:
     # Opt-in pure-code tool constraints (native flags only; no prefill profiles).
     disable_web_search: bool = False
     disallowed_tools: list[str] = field(default_factory=list)
-    max_turns: int | None = None
     # Native same-task continuation (explicit; not ACP).
     continue_task: bool = False
     # Persist continuation metadata after a successful native keep run.
@@ -85,8 +84,6 @@ class RunConfig:
             self.include_dirty_paths = []
         if self.backend not in {"native", "acp"}:
             raise ValueError("backend must be native or acp")
-        if self.max_turns is not None and self.max_turns < 1:
-            raise ValueError("max_turns must be >= 1 when set")
         if self.continue_task and self.backend != "native":
             raise ValueError("continue_task requires backend=native")
         if self.disallowed_tools is None:
@@ -97,8 +94,20 @@ class RunConfig:
             disable_web_search=self.disable_web_search,
             disallowed_tools=self.disallowed_tools,
             allow_subagents=self.allow_subagents,
-            max_turns=self.max_turns,
         )
+
+    def effective_run_policy(self) -> dict[str, object]:
+        """Return the non-sensitive runner policy actually applied to this run."""
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "model_turn_limit": None,
+            "output_token_limit": "not_configured_by_grok_worker",
+            "idle_timeout_seconds": self.timeout,
+            "hard_timeout_seconds": self.hard_timeout,
+            "tool_policy": self.tool_policy().to_dict(),
+        }
 
 
 @dataclass

@@ -39,6 +39,7 @@ from grok_worker.execution_contract import (
     observe_subagents_from_log,
 )
 from grok_worker.finalize import (
+    classify_backend_failure,
     classify_live_backend_attention,
     finalize_run,
     mark_failed,
@@ -51,7 +52,8 @@ from grok_worker.metrics import append_metric, extract_token_metrics_from_text, 
 from grok_worker.models import WorkerMeta, WorkerState
 from grok_worker.native_result import (
     NATIVE_RESULT_CAPTURE_GUIDANCE,
-    persist_native_structured_result,
+    parse_native_structured_result,
+    persist_native_worker_result,
 )
 from grok_worker.paths import meta_dir, meta_path
 from grok_worker.process_identity import (
@@ -81,6 +83,10 @@ from grok_worker.run_config import (
 )
 from grok_worker.safety import SafetyError
 from grok_worker.settings import agent_policy_environment
+from grok_worker.verification_runner import (
+    VerificationRunnerError,
+    capture_final_gate_evidence,
+)
 
 
 class Interrupt(Exception):
@@ -376,6 +382,8 @@ def execute_worker(
                     )
             _evaluate_live_progress()
 
+        automatic_continuations: list[str] = []
+        final_backend_failure = None
         try:
             child_env = env
             if cfg.backend == "native":
@@ -385,22 +393,69 @@ def execute_worker(
                     startup_warnings.append(preflight_warning)
                     with agent_log.open("a", encoding="utf-8") as stream:
                         stream.write(f"[grok-worker] warning: {preflight_warning}\n")
-                cmd = build_native_cmd(cfg, clone, prompt_file, continue_session=continue_session)
-            else:
-                cmd = build_acpx_cmd(cfg, clone, agent, prompt)
-            # Monotonic wall for one-shot backend duration (not filesystem mtime).
+
+            # Monotonic wall covers every same-lifecycle budget continuation.
             process_started = time.monotonic()
-            process_result = run_with_activity_lease(
-                cmd,
-                clone=clone,
-                log=agent_log,
-                env=child_env,
-                idle_timeout_seconds=cfg.timeout,
-                hard_timeout_seconds=cfg.hard_timeout,
-                on_start=_record_child,
-                on_output=_inspect_live_output,
-                on_tick=_evaluate_live_progress,
-            )
+            invocation = 0
+            active_prompt_file = prompt_file
+            while True:
+                if cfg.backend == "native":
+                    cmd = build_native_cmd(
+                        cfg,
+                        clone,
+                        active_prompt_file,
+                        continue_session=continue_session,
+                    )
+                else:
+                    cmd = build_acpx_cmd(cfg, clone, agent, prompt)
+                try:
+                    segment_start = agent_log.stat().st_size
+                except OSError:
+                    segment_start = 0
+                process_result = run_with_activity_lease(
+                    cmd,
+                    clone=clone,
+                    log=agent_log,
+                    env=child_env,
+                    idle_timeout_seconds=cfg.timeout,
+                    hard_timeout_seconds=cfg.hard_timeout,
+                    initialize=invocation == 0,
+                    on_start=_record_child,
+                    on_output=_inspect_live_output,
+                    on_tick=_evaluate_live_progress,
+                )
+                try:
+                    with agent_log.open("rb") as segment_stream:
+                        segment_stream.seek(segment_start)
+                        segment = segment_stream.read().decode("utf-8", errors="replace")
+                except OSError:
+                    segment = ""
+                final_backend_failure = (
+                    classify_backend_failure(segment) if process_result.exit_code != 0 else None
+                )
+                if not (
+                    cfg.backend == "native"
+                    and process_result.timeout_message is None
+                    and final_backend_failure is not None
+                    and final_backend_failure.continuation_safe
+                ):
+                    break
+
+                automatic_continuations.append(final_backend_failure.kind)
+                invocation += 1
+                continue_session = True
+                active_prompt_file = meta_dir(clone) / "prompt-budget-continuation.md"
+                active_prompt_file.write_text(
+                    "Continue the same logical task from the existing native session. "
+                    "Preserve completed work, finish remaining implementation and "
+                    "verification, then return the required structured result.\n",
+                    encoding="utf-8",
+                )
+                with agent_log.open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        "[grok-worker] automatic same-task continuation after "
+                        f"{final_backend_failure.kind}\n"
+                    )
             process_duration_seconds = time.monotonic() - process_started
         except PermissionError:
             # Lifecycle registration is an integrity boundary. Re-raise so the
@@ -431,6 +486,16 @@ def execute_worker(
                 f"native Grok ignored requested reasoning effort {cfg.reasoning_effort!r}"
             )
         token_metrics = extract_token_metrics_from_text(log_text)
+        backend_failure = (
+            final_backend_failure
+            if cfg.backend == "native" and worker_exit != 0
+            else classify_backend_failure(log_text) if worker_exit != 0 else None
+        )
+        if backend_failure is not None:
+            meta.failure_kind = backend_failure.kind
+            meta.continuation_ready = backend_failure.continuation_safe and cfg.backend == "native"
+            if not meta.error_message:
+                meta.error_message = backend_failure.summary
         metrics_path = shared / "metrics" / "worker-runs.jsonl"
         metric_record: dict[str, object] = {
             "task_id": task_id,
@@ -441,6 +506,7 @@ def execute_worker(
             "acpx_exit_code": worker_exit if cfg.backend == "acp" else None,
             "tool_signature": cfg.tool_policy().signature(),
             "continue_session": continue_session,
+            "automatic_continuations": list(automatic_continuations),
         }
         if process_duration_seconds is not None:
             metric_record["process_duration_seconds"] = round(process_duration_seconds, 6)
@@ -467,8 +533,16 @@ def execute_worker(
         native_result_error: str | None = None
         if use_native_schema and worker_exit == 0:
             try:
-                persist_native_structured_result(clone, log_text, mode=oneshot_mode)
-            except (ResultError, OSError, ValueError) as exc:
+                native_result = parse_native_structured_result(log_text)
+                native_result = capture_final_gate_evidence(
+                    clone,
+                    native_result,
+                    execution.final_gates,
+                    env=child_env,
+                    timeout_seconds=cfg.timeout,
+                )
+                persist_native_worker_result(clone, native_result, mode=oneshot_mode)
+            except (ResultError, VerificationRunnerError, OSError, ValueError) as exc:
                 native_result_error = str(exc)
                 worker_exit = 1
                 meta.acpx_exit_code = worker_exit
@@ -488,13 +562,15 @@ def execute_worker(
             except (ResultError, OSError, ValueError):
                 continuation_result_ok = False
 
-        # Persist continuation only after semantic success and explicit request.
+        # Persist explicit successful continuations and recoverable native budget
+        # interruptions. The latter remain FAILED, but can resume the same clone.
         preserve_session = False
         if (
             cfg.backend == "native"
-            and continuation_result_ok
-            and cfg.keep_reason
-            and cfg.write_continuation
+            and (
+                (continuation_result_ok and cfg.keep_reason and cfg.write_continuation)
+                or meta.continuation_ready
+            )
         ):
             try:
                 cont = build_continuation_contract(
@@ -532,6 +608,7 @@ def execute_worker(
             "subagents": subagent_obs.to_dict(),
             "execution_contract": execution.to_dict(),
             "native_json_schema_result": use_native_schema,
+            "automatic_continuations": list(automatic_continuations),
             "preserve_native_session": preserve_session,
             "session": {
                 "name": None,
@@ -594,10 +671,12 @@ def execute_worker(
             cont_path = meta_dir(clone) / "continuation.json"
             preserve_session = (
                 cfg.backend == "native"
-                and cfg.write_continuation
-                and cfg.keep_reason is not None
                 and cont_path.is_file()
                 and not cont_path.is_symlink()
+                and (
+                    (cfg.write_continuation and cfg.keep_reason is not None)
+                    or meta.continuation_ready
+                )
             )
         except OSError:
             preserve_session = False
@@ -639,7 +718,7 @@ def execute_worker(
             )
             reason_code = None
             if meta.state == WorkerState.FAILED:
-                reason_code = "terminal_failed"
+                reason_code = meta.failure_kind or "terminal_failed"
             elif not session_cleaned and not session_retained:
                 reason_code = "session_cleanup_incomplete"
             elif meta.state == WorkerState.SUCCESS and not clone_cleaned:

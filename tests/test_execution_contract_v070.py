@@ -108,7 +108,6 @@ def test_tool_policy_signature_and_native_flags() -> None:
         disable_web_search=True,
         disallowed_tools=["WebSearch", "Bash"],
         allow_subagents=False,
-        max_turns=40,
     )
     other = ToolPolicy.from_fields(disable_web_search=True)
     assert policy.signature() != other.signature()
@@ -117,7 +116,7 @@ def test_tool_policy_signature_and_native_flags() -> None:
     assert "--disallowed-tools" in cmd
     assert "WebSearch,Bash" in cmd
     assert "--no-subagents" in cmd
-    assert cmd[cmd.index("--max-turns") + 1] == "40"
+    assert "--max-turns" not in cmd
 
 
 def test_build_native_cmd_includes_json_schema_and_continue(
@@ -133,18 +132,21 @@ def test_build_native_cmd_includes_json_schema_and_continue(
         mode="implementation",
         allow_subagents=True,
         disable_web_search=True,
-        max_turns=12,
         native_json_schema_result=True,
     )
     cmd = build_native_cmd(cfg, tmp_path, prompt, continue_session=True)
     assert "--continue" in cmd
     assert "--json-schema" in cmd
     assert "--disable-web-search" in cmd
-    assert "--max-turns" in cmd
+    assert "--max-turns" not in cmd
     assert "--reasoning-effort" in cmd
     schema_idx = cmd.index("--json-schema") + 1
     schema = json.loads(cmd[schema_idx])
     assert schema["required"] == worker_result_json_schema()["required"]
+    policy = cfg.effective_run_policy()
+    assert policy["model_turn_limit"] is None
+    assert policy["output_token_limit"] == "not_configured_by_grok_worker"
+    assert "max_turns" not in json.dumps(policy)
 
 
 def test_native_result_extract_and_persist(tmp_path: Path) -> None:

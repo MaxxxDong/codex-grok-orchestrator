@@ -14,14 +14,12 @@ class ToolPolicy:
     disable_web_search: bool = False
     disallowed_tools: tuple[str, ...] = ()
     allow_subagents: bool = True
-    max_turns: int | None = None
 
     def signature(self) -> str:
         payload = {
             "disable_web_search": self.disable_web_search,
             "disallowed_tools": list(self.disallowed_tools),
             "allow_subagents": self.allow_subagents,
-            "max_turns": self.max_turns,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
@@ -31,7 +29,6 @@ class ToolPolicy:
             "disable_web_search": self.disable_web_search,
             "disallowed_tools": list(self.disallowed_tools),
             "allow_subagents": self.allow_subagents,
-            "max_turns": self.max_turns,
             "signature": self.signature(),
         }
 
@@ -42,7 +39,6 @@ class ToolPolicy:
         disable_web_search: bool = False,
         disallowed_tools: list[str] | tuple[str, ...] | None = None,
         allow_subagents: bool = True,
-        max_turns: int | None = None,
     ) -> ToolPolicy:
         tools: list[str] = []
         seen: set[str] = set()
@@ -52,13 +48,10 @@ class ToolPolicy:
                 continue
             seen.add(name)
             tools.append(name)
-        if max_turns is not None and max_turns < 1:
-            raise ValueError("max_turns must be >= 1 when set")
         return cls(
             disable_web_search=bool(disable_web_search),
             disallowed_tools=tuple(tools),
             allow_subagents=bool(allow_subagents),
-            max_turns=max_turns,
         )
 
 
@@ -72,8 +65,6 @@ def apply_native_tool_flags(cmd: list[str], policy: ToolPolicy) -> list[str]:
     if not policy.allow_subagents:
         if "--no-subagents" not in out:
             out.append("--no-subagents")
-    if policy.max_turns is not None:
-        out.extend(["--max-turns", str(policy.max_turns)])
     return out
 
 

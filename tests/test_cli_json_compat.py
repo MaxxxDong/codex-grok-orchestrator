@@ -82,3 +82,12 @@ def test_cli_runner_rejects_unknown_option_without_python_traceback() -> None:
         "ClickException",
         "SystemExit",
     }
+
+
+def test_run_rejects_removed_max_turns_option() -> None:
+    runner = CliRunner()
+    bad = runner.invoke(app, ["run", "--max-turns", "12"])
+
+    assert bad.exit_code != 0
+    assert "No such option" in (bad.output or "")
+    assert "--max-turns" in (bad.output or "")

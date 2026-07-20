@@ -198,6 +198,7 @@ def start_detached_run(cfg: RunConfig) -> dict[str, Any]:
         "pid": process.pid,
         "backend": cfg.backend,
         "mode": cfg.mode,
+        "effective_run": cfg.effective_run_policy(),
         "shared_cache_root": str(shared),
         "disposable_root": str(cfg.disposable_root) if cfg.disposable_root else None,
         "artifact_root": str(cfg.artifact_root) if cfg.artifact_root else None,

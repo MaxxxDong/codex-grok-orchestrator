@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from grok_worker.execution_contract import ExecutionContract
 from grok_worker.gc import gc_disposable_root
 from grok_worker.grok_state import clone_session_root
 from grok_worker.models import WorkerMeta, dt_to_iso, utc_now
@@ -208,6 +210,48 @@ def test_native_backend_uses_source_home_high_and_project_mcp(
     assert metrics[-1]["backend"] == "native"
     assert metrics[-1]["cached_tokens"] == 2048
     assert metrics[-1]["reasoning_tokens"] == 77
+
+
+def test_native_execution_contract_captures_runner_owned_final_gate(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    executable = f'"{sys.executable}"' if os.name == "nt" else sys.executable
+    gate = f'{executable} -c "print(\'authoritative gate\')"'
+
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="implement and verify",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-runner-gate",
+            skip_post_gc=True,
+            execution=ExecutionContract.from_mapping({"finalGates": [gate]}),
+        )
+    )
+
+    assert outcome.state == "success"
+    receipt = json.loads(
+        (Path(outcome.artifact_path or "") / "verification.txt").read_text(encoding="utf-8")
+    )
+    runner_records = [
+        record
+        for record in receipt["result"]["verification"]
+        if record["log_path"].startswith(".grok-output/verification/runner-gate-")
+    ]
+    assert len(runner_records) == 1
+    assert runner_records[0]["command"] == gate
+    assert runner_records[0]["exit_code"] == 0
 
 
 def test_native_backend_rejects_reasoning_downgrade(
@@ -483,3 +527,79 @@ def test_semantic_failure_does_not_create_kept_continuation(
     assert not (clone / ".grok-worker/continuation.json").exists()
     lifecycle = WorkerMeta.read(meta_path(clone))
     assert lifecycle.retention_deadline is not None
+
+
+def test_budget_failure_automatically_resumes_same_native_session(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    if os.name == "nt":
+        original = fake.read_text(encoding="utf-8")
+        marker = "!cwd!\\.budget-first"
+        replacement = (
+            f'if not exist "{marker}" (\n'
+            f'  > "{marker}" echo first\n'
+            '  echo {"type":"error","message":"response truncated by max_tokens",'
+            '"error_kind":"max_tokens_truncation"}\n'
+            '  exit /b 1\n'
+            ')\n'
+            'mkdir "!cwd!\\.grok-output\\verification" 2>nul\n'
+        )
+        fake.write_text(
+            original.replace(
+                'mkdir "!cwd!\\.grok-output\\verification" 2>nul\n',
+                replacement,
+                1,
+            ),
+            encoding="utf-8",
+        )
+    else:
+        original = fake.read_text(encoding="utf-8")
+        replacement = (
+            'if [ ! -e "$cwd/.budget-first" ]; then\n'
+            '  : > "$cwd/.budget-first"\n'
+            "  printf '%s\\n' '{\"type\":\"error\",\"message\":"
+            "\"response truncated by max_tokens\",\"error_kind\":"
+            "\"max_tokens_truncation\"}'\n"
+            '  exit 1\n'
+            'fi\n'
+            'mkdir -p "$cwd/.grok-output/verification"\n'
+        )
+        fake.write_text(
+            original.replace(
+                'mkdir -p "$cwd/.grok-output/verification"\n',
+                replacement,
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    common = dict(
+        source=git_source,
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        backend="native",
+        prepare_deps=False,
+        task_id="native-budget-resume",
+        skip_post_gc=True,
+    )
+
+    outcome = run_worker(RunConfig(**common, prompt="complete the task"))
+
+    assert outcome.state == "success"
+    assert outcome.clone_path is None
+    receipt = json.loads(
+        (Path(outcome.artifact_path or "") / "verification.txt").read_text(encoding="utf-8")
+    )
+    assert receipt["automatic_continuations"] == ["max_tokens_truncation"]
+    assert receipt["metrics"][-1]["automatic_continuations"] == [
+        "max_tokens_truncation"
+    ]
+    assert receipt["metrics"][-1]["continue_session"] is True

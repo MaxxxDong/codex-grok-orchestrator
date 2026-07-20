@@ -14,6 +14,18 @@ from grok_worker.paths import meta_dir, meta_path
 from grok_worker.runner import RunConfig, run_worker
 
 
+def test_artifact_failure_preserves_primary_backend_error() -> None:
+    from grok_worker.finalize import _compose_artifact_error_message
+
+    message = _compose_artifact_error_message(
+        "upstream native failure: response truncated by max_tokens",
+        ArtifactError("disk full"),
+    )
+
+    assert message.startswith("upstream native failure")
+    assert "secondary artifact finalization failed: disk full" in message
+
+
 def test_artifact_exception_never_deletes(
     git_source: Path,
     tmp_roots: dict[str, Path],

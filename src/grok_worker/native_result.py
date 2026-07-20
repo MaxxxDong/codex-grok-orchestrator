@@ -163,6 +163,12 @@ def persist_native_structured_result(
     mode: str,
 ) -> WorkerResult:
     """Validate model JSON Schema output and atomically write canonical result.json."""
+    result = parse_native_structured_result(log_text)
+    return persist_native_worker_result(clone, result, mode=mode)
+
+
+def parse_native_structured_result(log_text: str) -> WorkerResult:
+    """Parse native JSON Schema output without trusting or writing its evidence."""
     raw = extract_structured_result_from_text(log_text)
     result = parse_result_dict(raw)
     if result.schema_version != RESULT_SCHEMA_VERSION:
@@ -170,7 +176,16 @@ def persist_native_structured_result(
             f"unsupported result schema_version {result.schema_version}; "
             f"expected {RESULT_SCHEMA_VERSION}"
         )
-    # Implementation still requires on-disk verification logs; validate them.
+    return result
+
+
+def persist_native_worker_result(
+    clone: Path,
+    result: WorkerResult,
+    *,
+    mode: str,
+) -> WorkerResult:
+    """Validate evidence and atomically persist a parsed native WorkerResult."""
     if mode == "implementation":
         validate_verification_files(clone, result)
     path = result_path(clone)
@@ -187,6 +202,8 @@ __all__ = [
     "NATIVE_RESULT_CAPTURE_MARKER",
     "extract_structured_result_from_text",
     "json_schema_cli_argument",
+    "parse_native_structured_result",
     "persist_native_structured_result",
+    "persist_native_worker_result",
     "worker_result_json_schema",
 ]

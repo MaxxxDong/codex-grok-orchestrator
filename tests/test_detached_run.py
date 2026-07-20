@@ -153,6 +153,10 @@ def test_detached_run_returns_before_worker_and_watch_gets_terminal(
     assert receipt["accepted"] is True
     assert receipt["run_id"] == "detached-run-success"
     assert receipt["dispatcher_id"] == "detached-dispatcher"
+    assert receipt["effective_run"]["model_turn_limit"] is None
+    assert receipt["effective_run"]["output_token_limit"] == (
+        "not_configured_by_grok_worker"
+    )
     assert isinstance(receipt["pid"], int)
     assert Path(receipt["launch_log"]).is_file()
     assert elapsed < 0.6

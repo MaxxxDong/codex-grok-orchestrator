@@ -119,6 +119,9 @@ class WorkerMeta:
     result_status: str | None = None
     acpx_exit_code: int | None = None
     error_message: str | None = None
+    # Bounded runner-owned classification. This never contains provider output.
+    failure_kind: str | None = None
+    continuation_ready: bool = False
     legacy_classification: str | None = None
     source_state_fingerprint: str | None = None
     interrupted: bool = False
@@ -136,6 +139,8 @@ class WorkerMeta:
     # Structured disclosure summary (values/content/prompt/env-free). Survives
     # successful clone deletion because lifecycle is copied into worker.log.
     disclosure_summary: dict[str, Any] | None = None
+    # Sanitized effective runner policy; never contains prompts, keys, or env.
+    effective_run: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -171,6 +176,8 @@ class WorkerMeta:
             result_status=data.get("result_status"),
             acpx_exit_code=data.get("acpx_exit_code"),
             error_message=data.get("error_message"),
+            failure_kind=_optional_str(data.get("failure_kind")),
+            continuation_ready=bool(data.get("continuation_ready", False)),
             legacy_classification=data.get("legacy_classification"),
             source_state_fingerprint=data.get("source_state_fingerprint"),
             interrupted=bool(data.get("interrupted", False)),
@@ -180,6 +187,7 @@ class WorkerMeta:
             mode=_optional_str(data.get("mode")),
             backend=_optional_str(data.get("backend")),
             disclosure_summary=_optional_disclosure(data.get("disclosure_summary")),
+            effective_run=_optional_mapping(data.get("effective_run")),
         )
 
     @classmethod
@@ -245,6 +253,12 @@ def _optional_disclosure(value: Any) -> dict[str, Any] | None:
                     nested[nk] = nv
             out[key] = nested
     return out if out else None
+
+
+def _optional_mapping(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return dict(value)
 
 
 def meta_is_trusted(meta: WorkerMeta) -> bool:
