@@ -137,6 +137,13 @@ terminal, settled, or attention event wakes it immediately. For parallel work,
 one dispatcher-scoped watch covers the wave. Detached launcher logs are private
 shared-cache entries governed by the same quota and TTL/LRU GC.
 
+While a Worker is still running, the 2-second lease loop classifies only bounded,
+recognizable top-level provider HTTP/auth/rate-limit/unavailable failures,
+structured ACP transport errors, and ignored reasoning effort. The first match
+emits one `running/attention` event containing only a reason code. It does not
+terminate the process: Grok may recover, and a later terminal/settled event still
+defines the outcome. Plugin-level MCP warnings do not match this classifier.
+
 On `terminal/success`, consume the verified artifact and wait once more for
 `settled`. On failure or `attention_required=true`, inspect authoritative
 lifecycle and only then a bounded log tail. Do not repeatedly read unchanged
@@ -405,6 +412,6 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.5.3`. Lifecycle and artifact formats remain
+The current public release is `0.6.0`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.

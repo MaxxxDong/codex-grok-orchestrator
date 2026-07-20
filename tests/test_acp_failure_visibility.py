@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from grok_worker.finalize import summarize_acp_failure
+from grok_worker.finalize import (
+    classify_live_backend_attention,
+    summarize_acp_failure,
+    summarize_backend_failure,
+)
 from grok_worker.models import WorkerMeta
 from grok_worker.paths import meta_path
 from grok_worker.runner import RunConfig, run_worker
@@ -26,6 +30,21 @@ def test_summarize_acp_failure_ignores_arbitrary_model_output() -> None:
     long_model = "I implemented a feature:\n" + ("x" * 5000) + "\nresult.json missing on purpose\n"
     assert summarize_acp_failure(long_model) is None
     assert summarize_acp_failure("") is None
+
+
+def test_provider_500_is_classified_from_late_bounded_output() -> None:
+    output = ("harmless startup output\n" * 300) + (
+        "responses API error status=500 Internal Server Error model_id=grok-test\n"
+    )
+
+    assert classify_live_backend_attention(output) == "provider_http_5xx"
+    assert summarize_backend_failure(output) == "upstream provider failure: HTTP 500"
+
+
+def test_model_text_mentioning_api_error_does_not_emit_live_attention() -> None:
+    model_text = "The documentation gives API error status=500 as an example."
+
+    assert classify_live_backend_attention(model_text) is None
 
 
 def test_runtime_internal_error_visible_with_missing_structured_result(

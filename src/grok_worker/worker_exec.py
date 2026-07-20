@@ -20,7 +20,12 @@ from grok_worker.cache_policy import cache_use_lease, shared_cache_environment
 from grok_worker.completion_events import emit_completion_event
 from grok_worker.constants import OUTPUT_DIR_NAME
 from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
-from grok_worker.finalize import finalize_run, mark_failed, try_collect
+from grok_worker.finalize import (
+    classify_live_backend_attention,
+    finalize_run,
+    mark_failed,
+    try_collect,
+)
 from grok_worker.gc import gc_disposable_root
 from grok_worker.grok_state import cleanup_clone_session_state, clone_session_root
 from grok_worker.locks import worker_lock
@@ -162,6 +167,31 @@ def execute_worker(
             meta.acpx_start_token = process_start_token(child_proc.pid)
             meta.write(meta_path(clone))
 
+        live_attention_reason: str | None = None
+        live_output_tail = ""
+
+        def _inspect_live_output(chunk: str) -> None:
+            nonlocal live_attention_reason, live_output_tail
+            if live_attention_reason is not None:
+                return
+            live_output_tail = (live_output_tail + chunk)[-16_384:]
+            reason = classify_live_backend_attention(live_output_tail)
+            if reason is None:
+                return
+            live_attention_reason = reason
+            emit_completion_event(
+                task_id=task_id,
+                state=str(meta.state),
+                artifact_path=None,
+                shared_cache_root=shared,
+                run_id=meta.run_id,
+                dispatcher_id=meta.dispatcher_id,
+                kind="attention",
+                artifact_ready=False,
+                attention_required=True,
+                reason_code=reason,
+            )
+
         try:
             child_env = env
             if cfg.backend == "native":
@@ -184,6 +214,7 @@ def execute_worker(
                 idle_timeout_seconds=cfg.timeout,
                 hard_timeout_seconds=cfg.hard_timeout,
                 on_start=_record_child,
+                on_output=_inspect_live_output,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             with agent_log.open("a", encoding="utf-8") as stream:

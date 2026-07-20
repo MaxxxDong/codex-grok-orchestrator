@@ -1,11 +1,22 @@
-# Windows / WSL upgrade: 0.3-0.5.2 to 0.5.3
+# Windows / WSL upgrade: 0.3-0.5.3 to 0.6.0
 
 Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
 signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
 headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
 requirement.
 
-## What changes in 0.5.3
+## What changes in 0.6.0
+
+- Codex dispatchers launch one-shot work with `run --detach`, receive a
+  structured receipt immediately, and wait through `watch` instead of keeping a
+  foreground shell open.
+- Detached execution reuses the same lifecycle, High-reasoning checks, cache
+  profile, three-file artifacts, failure retention, and cleanup as foreground
+  execution.
+- Detached launcher logs are covered by the existing shared-cache quota and
+  TTL/LRU cleanup.
+
+## Changes retained from 0.5.3 and earlier
 
 - `grok-worker watch` wakes immediately for terminal or attention events and
   retains a compact 300-second health heartbeat as fallback.
@@ -15,8 +26,6 @@ requirement.
   are no longer mistaken for literal credentials.
 - The 0.5.2 native Grok, cache, session-cleanup, plugin/MCP, and High-reasoning
   behavior remains unchanged.
-
-## Changes inherited from 0.5.2
 
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
@@ -66,7 +75,7 @@ if [ -d "$old" ]; then
   mv "$old" "$backup"
 fi
 
-git clone --branch v0.5.3 --depth 1 \
+git clone --branch v0.6.0 --depth 1 \
   https://github.com/MaxxxDong/codex-grok-orchestrator.git \
   "$old"
 

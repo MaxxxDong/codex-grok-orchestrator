@@ -45,6 +45,27 @@ def test_runtime_version_matches_package_metadata() -> None:
     assert __version__ == data["project"]["version"]
 
 
+def test_public_version_surfaces_match_package_metadata() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = project["project"]["version"]
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = [item for item in lock["package"] if item["name"] == "grok-worker"]
+
+    assert [item["version"] for item in locked] == [version]
+
+    expected = {
+        "README.md": (f"**{version}**", f"@v{version}"),
+        "CHANGELOG.md": (f"## [{version}]",),
+        "docs/index.html": (f"@v{version}",),
+        "docs/operations.md": (f"current public release is `{version}`",),
+        "docs/releases/release-notes.md": (f"**Version:** `grok-worker` {version}",),
+        "docs/windows-upgrade.md": (f"to {version}", f"--branch v{version}"),
+    }
+    for relative, snippets in expected.items():
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert all(snippet in text for snippet in snippets), relative
+
+
 def test_public_docs_match_external_artifact_contract() -> None:
     from grok_worker.artifact_contract import ARTIFACT_FILES
 
@@ -221,8 +242,11 @@ def test_test_marker_is_obviously_fake() -> None:
 
 def test_release_notes_cover_current_public_release() -> None:
     text = (ROOT / "docs" / "releases" / "release-notes.md").read_text(encoding="utf-8")
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["version"]
 
-    assert "2026-07-19" in text
+    assert f"**Version:** `grok-worker` {version}" in text
     assert "0.5.0" in text
     assert "codex-grok-orchestrator" in text
     assert "grok-worker" in text

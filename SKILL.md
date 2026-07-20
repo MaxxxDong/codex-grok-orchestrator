@@ -317,6 +317,11 @@ reasoning downgrade, and unverifiable implementation results are failures.
   from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
   and the bounded log tail. An unchanged heartbeat needs no full log read and no
   user-facing narration.
+- **Live backend attention**: a recognized provider HTTP/auth/rate-limit/
+  unavailable failure or ignored reasoning effort emits one non-sensitive
+  `running/attention` pointer within the lease poll interval. It wakes `watch`
+  but does not kill a Worker that may recover. Preserve the returned cursor and
+  decide whether to keep waiting from lifecycle plus a bounded log tail.
 - **Health checks**: `health` remains a diagnostic-only read-only fallback. It reports lifecycle,
   bounded non-symlink workspace activity, fixed progress step, result/artifact
   readiness, process identity, CPU/RSS, and timeout remaining, but never kills,

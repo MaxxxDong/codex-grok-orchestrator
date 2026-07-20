@@ -30,7 +30,78 @@ _ACP_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 _AGENT_OUTPUT_SCAN_LIMIT = 2048
+_AGENT_OUTPUT_TAIL_LIMIT = 8192
 _STARTUP_ERROR_RE = re.compile(r"\[grok-worker\]\s*startup failed:\s*([^\n\r]{1,160})")
+_PROVIDER_HTTP_STATUS_RE = re.compile(
+    r"(?:responses\s+api\s+error|api\s+error)[^\n\r]{0,240}?"
+    r"\bstatus\s*[=:]?\s*(401|403|429|5\d\d)\b",
+    re.IGNORECASE,
+)
+_LIVE_PROVIDER_HTTP_STATUS_RE = re.compile(
+    r"responses\s+api\s+error[^\n\r]{0,240}?"
+    r"\bstatus\s*[=:]?\s*(401|403|429|5\d\d)\b",
+    re.IGNORECASE,
+)
+_PROVIDER_JSON_STATUS_RE = re.compile(
+    r'"http_status"\s*:\s*(401|403|429|5\d\d)\b',
+    re.IGNORECASE,
+)
+_PROVIDER_UNAVAILABLE_RE = re.compile(
+    r"service temporarily unavailable|the model did not respond to this request",
+    re.IGNORECASE,
+)
+_RUNTIME_ERROR_ENVELOPE_RE = re.compile(
+    r"responses\s+api\s+error|\{\s*\"type\"\s*:\s*\"error\"|error:\s*internal error",
+    re.IGNORECASE,
+)
+_REASONING_DOWNGRADE_RE = re.compile(
+    r"model does not support reasoning effort; ignoring",
+    re.IGNORECASE,
+)
+
+
+def _bounded_failure_text(agent_output: str) -> str:
+    if len(agent_output) <= _AGENT_OUTPUT_SCAN_LIMIT + _AGENT_OUTPUT_TAIL_LIMIT:
+        return agent_output
+    return (
+        agent_output[:_AGENT_OUTPUT_SCAN_LIMIT]
+        + "\n"
+        + agent_output[-_AGENT_OUTPUT_TAIL_LIMIT:]
+    )
+
+
+def _provider_status(text: str, *, live_only: bool = False) -> int | None:
+    patterns = (
+        (_LIVE_PROVIDER_HTTP_STATUS_RE, _PROVIDER_JSON_STATUS_RE)
+        if live_only
+        else (_PROVIDER_HTTP_STATUS_RE, _PROVIDER_JSON_STATUS_RE)
+    )
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
+def classify_live_backend_attention(agent_output: str) -> str | None:
+    """Return a non-sensitive reason code for actionable live backend failures."""
+    snippet = _bounded_failure_text(agent_output)
+    status = _provider_status(snippet, live_only=True)
+    if status in (401, 403):
+        return "provider_auth_rejected"
+    if status == 429:
+        return "provider_rate_limited"
+    if status is not None and 500 <= status <= 599:
+        return "provider_http_5xx"
+    if _PROVIDER_UNAVAILABLE_RE.search(snippet) and _RUNTIME_ERROR_ENVELOPE_RE.search(
+        snippet
+    ):
+        return "provider_unavailable"
+    if _REASONING_DOWNGRADE_RE.search(snippet):
+        return "reasoning_effort_ignored"
+    if _ACP_ERROR_RE.search(snippet):
+        return "backend_transport_error"
+    return None
 
 
 def summarize_acp_failure(agent_output: str) -> str | None:
@@ -41,7 +112,7 @@ def summarize_acp_failure(agent_output: str) -> str | None:
     """
     if not agent_output:
         return None
-    snippet = agent_output[:_AGENT_OUTPUT_SCAN_LIMIT]
+    snippet = _bounded_failure_text(agent_output)
     match = _ACP_ERROR_RE.search(snippet)
     if match is None:
         return None
@@ -56,10 +127,15 @@ def summarize_backend_failure(agent_output: str) -> str | None:
     acp = summarize_acp_failure(agent_output)
     if acp:
         return acp
-    snippet = agent_output[:_AGENT_OUTPUT_SCAN_LIMIT]
+    snippet = _bounded_failure_text(agent_output)
     startup = _STARTUP_ERROR_RE.search(snippet)
     if startup:
         return f"backend startup failure: {' '.join(startup.group(1).split())}"
+    status = _provider_status(snippet)
+    if status is not None:
+        return f"upstream provider failure: HTTP {status}"
+    if _PROVIDER_UNAVAILABLE_RE.search(snippet):
+        return "upstream provider failure: service unavailable"
     for line in snippet.splitlines():
         try:
             payload = json.loads(line)
