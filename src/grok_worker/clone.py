@@ -332,6 +332,17 @@ def _untracked_rels(repo: Path) -> list[str]:
     return out
 
 
+def _tracked_dirty_rels(repo: Path) -> set[str]:
+    raw = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", "HEAD"]
+    )
+    return {
+        item.decode("utf-8", errors="surrogateescape")
+        for item in raw.split(b"\0")
+        if item
+    }
+
+
 def _apply_dirty_to_clone(
     source: Path,
     clone: Path,
@@ -362,21 +373,11 @@ def _apply_dirty_to_clone(
             if src_f.is_symlink() or src_f.is_file():
                 _copy_path(src_f, clone / rel)
     else:
-        # Path-scoped: apply full HEAD diff then reset unlisted paths, or apply
-        # path-limited diffs. Prefer path-limited for determinism.
         if allowed:
-            # Tracked changes for allowlisted paths.
+            # Keep the Windows command line bounded; reject a source race after
+            # applying rather than putting every dirty path on git's argv.
             tracked = subprocess.check_output(
-                [
-                    "git",
-                    "-C",
-                    str(source),
-                    "diff",
-                    "--binary",
-                    "HEAD",
-                    "--",
-                    *sorted(allowed),
-                ]
+                ["git", "-C", str(source), "diff", "--binary", "HEAD"]
             )
             if tracked.strip():
                 proc = subprocess.run(
@@ -388,6 +389,8 @@ def _apply_dirty_to_clone(
                 if proc.returncode != 0:
                     err = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
                     raise CloneError(f"failed applying dirty diff to clone: {err}")
+            if _tracked_dirty_rels(clone) - allowed:
+                raise CloneError("source changed during dirty snapshot; retrying cleanly")
             untracked = set(_untracked_rels(source))
             for rel in sorted(allowed):
                 if rel in untracked:
@@ -439,12 +442,9 @@ def source_state_fingerprint(
         h.update(git_head(source).encode())
         if allowlist is not None:
             paths = sorted(set(allowlist))
-            if paths:
-                h.update(
-                    subprocess.check_output(
-                        ["git", "-C", str(source), "diff", "--binary", "HEAD", "--", *paths]
-                    )
-                )
+            h.update(
+                subprocess.check_output(["git", "-C", str(source), "diff", "--binary", "HEAD"])
+            )
             untracked = set(_untracked_rels(source))
             for rel in paths:
                 if rel not in untracked:

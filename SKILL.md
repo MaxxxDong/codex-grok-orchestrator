@@ -151,7 +151,9 @@ Runner-owned `finalGates` start at the clone root and must be complete executabl
 commands, not task aliases such as `pytest` or `testDebugUnitTest`. Include the
 repository wrapper or working directory, for example `npm --prefix services/api
 test`, `.\gradlew.bat -p apps/android testDebugUnitTest`, or `uv run --no-sync
-pytest -q`.
+pytest -q`. When a PowerShell gate sets an environment variable, use
+`Set-Item Env:JAVA_HOME 'C:\path'`; do not put `$env:...` inside an interpolating
+manifest here-string.
 
 ## Commands
 

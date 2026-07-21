@@ -152,6 +152,11 @@ class ExecutionContract:
     def validate_runner_gates(self) -> None:
         """Reject task labels that cannot be executed from the clone root."""
         for command in self.runner_final_gates():
+            if command.lstrip().startswith("="):
+                raise ExecutionContractError(
+                    f"final gate {command!r} starts with '='; a PowerShell variable was likely "
+                    "expanded before the manifest reached grok-worker"
+                )
             if len(command.split()) == 1 and "/" not in command and "\\" not in command:
                 raise ExecutionContractError(
                     f"final gate {command!r} must be an executable command, not a bare task name; "

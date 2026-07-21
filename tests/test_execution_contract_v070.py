@@ -79,6 +79,14 @@ def test_execution_contract_rejects_bare_final_gate(gate: str) -> None:
         contract.validate_runner_gates()
 
 
+def test_execution_contract_rejects_expanded_away_powershell_assignment() -> None:
+    contract = ExecutionContract.from_mapping(
+        {"finalGates": ["='C:\\AI\\jdk'; .\\gradlew.bat test"]}
+    )
+    with pytest.raises(ExecutionContractError, match="PowerShell variable"):
+        contract.validate_runner_gates()
+
+
 def test_runner_rejects_bare_gate_before_source_or_backend(tmp_path: Path) -> None:
     cfg = RunConfig(
         source=tmp_path / "missing-source",

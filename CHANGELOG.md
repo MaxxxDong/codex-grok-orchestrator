@@ -41,6 +41,10 @@ All notable public changes are recorded here. The project follows semantic versi
   download cache, including native Windows npm launcher resolution.
 - Reject bare runner-owned final-gate task names before clone creation or provider
   invocation; gates must identify an executable command from the clone root.
+- Reject final gates whose PowerShell variable was expanded away while authoring
+  the manifest, before clone creation or provider invocation.
+- Keep dirty-snapshot Git argv bounded on Windows, then reject any tracked source
+  race that materialized outside the disclosure inventory.
 
 ## [0.7.2] - 2026-07-20
 
