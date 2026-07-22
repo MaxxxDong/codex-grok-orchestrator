@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -149,8 +153,9 @@ class ExecutionContract:
         """Concrete commands the lifecycle runner owns and executes exactly once."""
         return tuple(dict.fromkeys((*self.final_gates, *self.required_failed_gates)))
 
-    def validate_runner_gates(self) -> None:
+    def validate_runner_gates(self, *, environ: Mapping[str, str] | None = None) -> None:
         """Reject task labels that cannot be executed from the clone root."""
+        environment = os.environ if environ is None else environ
         for command in self.runner_final_gates():
             if command.lstrip().startswith("="):
                 raise ExecutionContractError(
@@ -161,6 +166,20 @@ class ExecutionContract:
                 raise ExecutionContractError(
                     f"final gate {command!r} must be an executable command, not a bare task name; "
                     "include the repository wrapper and working directory"
+                )
+            if (
+                re.match(
+                    r'^\s*&?\s*(?:"[^"]*gradlew\.bat"|[^\s;]*gradlew\.bat)(?:\s|$)',
+                    command,
+                    re.I,
+                )
+                and not environment.get("JAVA_HOME")
+                and shutil.which("java", path=environment.get("PATH", "")) is None
+            ):
+                raise ExecutionContractError(
+                    f"final gate {command!r} starts gradlew.bat, but the runner environment has "
+                    "neither JAVA_HOME nor java on PATH; prefix the gate with "
+                    "Set-Item Env:JAVA_HOME '<absolute-jdk-path>';"
                 )
 
     def signature(self) -> str:

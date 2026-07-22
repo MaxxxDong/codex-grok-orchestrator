@@ -87,6 +87,27 @@ def test_execution_contract_rejects_expanded_away_powershell_assignment() -> Non
         contract.validate_runner_gates()
 
 
+def test_execution_contract_rejects_direct_gradle_gate_without_java() -> None:
+    contract = ExecutionContract.from_mapping(
+        {"finalGates": [r".\apps\android\gradlew.bat -p apps\android testDebugUnitTest"]}
+    )
+
+    with pytest.raises(ExecutionContractError, match="neither JAVA_HOME nor java on PATH"):
+        contract.validate_runner_gates(environ={"PATH": ""})
+
+
+def test_execution_contract_allows_self_contained_gradle_gate_without_host_java() -> None:
+    contract = ExecutionContract.from_mapping(
+        {
+            "finalGates": [
+                r"Set-Item Env:JAVA_HOME 'C:\toolchain\jdk'; & .\gradlew.bat testDebugUnitTest"
+            ]
+        }
+    )
+
+    contract.validate_runner_gates(environ={"PATH": ""})
+
+
 def test_runner_rejects_bare_gate_before_source_or_backend(tmp_path: Path) -> None:
     cfg = RunConfig(
         source=tmp_path / "missing-source",

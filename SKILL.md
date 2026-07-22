@@ -154,6 +154,9 @@ test`, `.\gradlew.bat -p apps/android testDebugUnitTest`, or `uv run --no-sync
 pytest -q`. When a PowerShell gate sets an environment variable, use
 `Set-Item Env:JAVA_HOME 'C:\path'`; do not put `$env:...` inside an interpolating
 manifest here-string.
+The runner inherits the launcher process environment only. Environment variables
+set inside a Worker's focused-check shell do not flow back into runner-owned
+gates, so repeat required toolchain setup in each self-contained final gate.
 
 ## Commands
 
