@@ -198,6 +198,9 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
         if behavior == "acpx_zero_no_result":
             print("acpx ok but no result")
             sys.exit(0)
+        if behavior == "cancelled_analysis_envelope":
+            print(json.dumps({{"text": "I'll research this now.", "stopReason": "Cancelled"}}))
+            sys.exit(0)
         if behavior == "nonzero_completed":
             (out / "verification" / "tests.txt").write_text("ok\\n", encoding="utf-8")
             write_result(
