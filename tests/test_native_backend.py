@@ -106,7 +106,7 @@ if [ "${1:-}" = "inspect" ]; then
   printf '%s\n' \
     "{\"configSources\":{\"layers\":[{\"role\":\"user\",\"path\":\"$HOME/.grok/config.toml\"}]},"\
 "\"plugins\":[],\"mcpServers\":[]}"
-  exit 0
+  exit __INSPECT_EXIT__
 fi
 cwd=""
 args=""
@@ -130,7 +130,7 @@ printf '%s\n' \
 '"exit_code":0,"log_path":".grok-output/verification/verify.log"}],'\
 '"usage":{"input_tokens":4096,"cache_read_input_tokens":2048,'\
 '"output_tokens":128,"reasoning_tokens":77,"num_turns":3}}'
-"""
+""".replace("__INSPECT_EXIT__", str(inspect_exit), 1)
         + warning,
         encoding="utf-8",
     )

@@ -7,12 +7,26 @@ from pathlib import Path
 
 import pytest
 
+from grok_worker import acpx_runtime
 from grok_worker.acpx_runtime import (
     AcpxRuntimeError,
     install_managed_runtime,
     patch_acpx_javascript,
     resolve_managed_acpx_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stable_windows_runtime_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep source-transform tests independent of the host OS toolchain."""
+    original_which = acpx_runtime.which
+    monkeypatch.setattr(
+        acpx_runtime,
+        "which",
+        lambda name: "/test/pwsh" if name == "pwsh" else original_which(name),
+    )
+    monkeypatch.setattr(acpx_runtime, "_pwsh_info", lambda: ("/test/pwsh", "7.5.0"))
+    monkeypatch.setattr(acpx_runtime, "_windows_cmd_encoding", lambda: (65001, "utf-8"))
 
 UPSTREAM_FIXTURE = '''
 function buildTerminalSpawnCommand(command, args) {

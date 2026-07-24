@@ -193,7 +193,9 @@ def _release_destination(owner: tuple[int, int, int]) -> None:
     if os.name == "nt":
         import ctypes
 
-        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(owner[2])
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(  # type: ignore[attr-defined]
+            owner[2]
+        )
     else:
         os.close(owner[2])
 
@@ -217,7 +219,7 @@ def _open_windows_directory(path: Path) -> tuple[int, int, int]:
             ("nFileIndexLow", wintypes.DWORD),
         ]
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
     create_file = kernel32.CreateFileW
     create_file.argtypes = [
         wintypes.LPCWSTR,
@@ -240,16 +242,16 @@ def _open_windows_directory(path: Path) -> tuple[int, int, int]:
     )
     invalid = ctypes.c_void_p(-1).value
     if handle in (None, invalid):
-        error = ctypes.get_last_error()
-        raise OSError(error, ctypes.FormatError(error), str(path))
+        error = ctypes.get_last_error()  # type: ignore[attr-defined]
+        raise OSError(error, ctypes.FormatError(error), str(path))  # type: ignore[attr-defined]
     info = ByHandleFileInformation()
     get_info = kernel32.GetFileInformationByHandle
     get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(ByHandleFileInformation)]
     get_info.restype = wintypes.BOOL
     if not get_info(handle, ctypes.byref(info)):
-        error = ctypes.get_last_error()
+        error = ctypes.get_last_error()  # type: ignore[attr-defined]
         kernel32.CloseHandle(handle)
-        raise OSError(error, ctypes.FormatError(error), str(path))
+        raise OSError(error, ctypes.FormatError(error), str(path))  # type: ignore[attr-defined]
     if info.dwFileAttributes & 0x00000400:
         kernel32.CloseHandle(handle)
         raise CloneError("refusing reparse-point clone destination")
