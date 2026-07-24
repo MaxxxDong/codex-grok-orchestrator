@@ -11,6 +11,7 @@ import pytest
 from grok_worker.safety import SafetyError, safe_rmtree, safe_unlink
 from grok_worker.task_id import TaskIdError, validate_task_id
 from grok_worker.temp_cleanup import clean_stale_tmp
+from tests.path_helpers import symlink_or_skip
 
 
 def test_task_id_traversal_rejected() -> None:
@@ -37,7 +38,7 @@ def test_output_symlink_escape_rejected(tmp_path: Path) -> None:
         '"summary":"ok","findings":[],"verification":[]}',
         encoding="utf-8",
     )
-    (clone / ".grok-output").symlink_to(outside)
+    symlink_or_skip(clone / ".grok-output", outside, target_is_directory=True)
     with pytest.raises(ResultError, match="symlink"):
         load_valid_result(clone)
 
@@ -55,7 +56,7 @@ def test_output_symlink_escape_rejected(tmp_path: Path) -> None:
     victim = tmp_path / "victim-ver"
     victim.mkdir()
     (victim / "t.txt").write_text("log", encoding="utf-8")
-    (out_dir / "verification").symlink_to(victim)
+    symlink_or_skip(out_dir / "verification", victim, target_is_directory=True)
     result = load_valid_result(clone2)
     with pytest.raises(ResultError, match="symlink"):
         validate_verification_files(clone2, result)
@@ -68,7 +69,7 @@ def test_safe_rmtree_refuses_symlink_clone(tmp_path: Path) -> None:
     victim.mkdir()
     (victim / "secret").write_text("s", encoding="utf-8")
     link = root / "clone"
-    link.symlink_to(victim)
+    symlink_or_skip(link, victim, target_is_directory=True)
     with pytest.raises(SafetyError):
         safe_rmtree(link, disposable_root=root, protected=[])
     assert (victim / "secret").is_file()
@@ -83,8 +84,8 @@ def test_safe_rmtree_nested_symlink_no_follow(tmp_path: Path) -> None:
     clone = root / "c1"
     clone.mkdir()
     (clone / "inner").mkdir()
-    (clone / "inner" / "link").symlink_to(outside)
-    (clone / "filelink").symlink_to(outside / "keep")
+    symlink_or_skip(clone / "inner" / "link", outside, target_is_directory=True)
+    symlink_or_skip(clone / "filelink", outside / "keep")
     safe_rmtree(clone, disposable_root=root, protected=[])
     assert (outside / "keep").is_file()
     assert not clone.exists()
@@ -125,7 +126,7 @@ def test_top_level_symlink_swap_toctou(tmp_path: Path) -> None:
         import shutil
 
         shutil.rmtree(clone)
-        clone.symlink_to(victim)
+        symlink_or_skip(clone, victim, target_is_directory=True)
         return result
 
     with mock.patch("grok_worker.safety.assert_safe_delete_target", side_effect=swap_then_assert):

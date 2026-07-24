@@ -30,6 +30,31 @@ Package versioning details also appear in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 2026-07-24 — Windows-native lifecycle efficiency and hardening / Windows 原生生命周期提效与加固
+
+**Version:** `grok-worker` 0.8.0
+
+This Windows integration removes the public model-turn cap and continues
+recoverable native budget stops inside the same Grok session. A single
+`watch --until-settled` call now covers terminal delivery and cleanup. Durable
+per-run receipts, runner-owned final gates, multi-root health, bounded dirty
+snapshot commands, nested npm preparation, strict gate preflight, and cancelled-
+result rejection keep the existing lifecycle fast and fail closed.
+
+本 Windows 集成版删除公开的模型轮次上限，并在同一 Grok 会话内续跑可恢复的预算型
+截断。一次 `watch --until-settled` 同时等待终态与清理。每个 run 的持久回执、runner
+执行 final gates、多根健康检查、有界脏快照、嵌套 npm 准备、严格门禁预检和取消结果
+拒收共同提升效率与可靠性。
+
+The release retains the single native Windows source/runtime chain, explicit
+Grok 4.5 High reasoning, normal plugins and MCP, hidden child processes, Win32
+process-tree cleanup, native JSON Schema results, and the exact external
+`changes.patch` / `worker.log` / `verification.txt` artifact contract. It does
+not introduce WSL or a second provider profile. Validation targets Grok Build
+0.2.111.
+
+---
+
 ## 2026-07-20 — Clean CI binary isolation / 干净 CI 二进制隔离
 
 **Version:** `grok-worker` 0.7.2
@@ -194,6 +219,11 @@ normal Grok home. Plugins, MCP servers, OAuth state, provider settings, bundled
 resources, explicit High reasoning, and prompt-cache eligibility remain available.
 Repository `.mcp.json` is visible. A lightweight environment inspection runs first,
 but it is advisory: extension errors are logged and the actual Grok launch proceeds.
+
+The Windows-native integration keeps managed ACP as the CLI one-shot default
+because the current Native workspace sandbox can deny terminal process creation.
+Native remains explicitly selectable; Windows retains its managed acpx,
+PowerShell 7/UTF-8, hidden-process, and process-tree cleanup policies.
 
 The launcher validates cache ownership, rejects symlinks, enforces private mode,
 and falls back when the host cache is sandbox-read-only. It prefers an existing

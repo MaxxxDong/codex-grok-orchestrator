@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import tomllib
 from html.parser import HTMLParser
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,12 +57,15 @@ def test_public_version_surfaces_match_package_metadata() -> None:
     assert [item["version"] for item in locked] == [version]
 
     expected = {
-        "README.md": (f"**{version}**", f"@v{version}"),
+        "README.md": (f"**{version}**", f"@codex/windows-native-v{version}"),
         "CHANGELOG.md": (f"## [{version}]",),
-        "docs/index.html": (f"@v{version}",),
+        "docs/index.html": (f"@codex/windows-native-v{version}",),
         "docs/operations.md": (f"current public release is `{version}`",),
         "docs/releases/release-notes.md": (f"**Version:** `grok-worker` {version}",),
-        "docs/windows-upgrade.md": (f"to {version}", f"--branch v{version}"),
+        "docs/windows-upgrade.md": (
+            f"to {version}",
+            f"--branch codex/windows-native-v{version}",
+        ),
     }
     for relative, snippets in expected.items():
         text = (ROOT / relative).read_text(encoding="utf-8")
@@ -144,8 +150,74 @@ def test_agent_defaults_to_worker_approval_and_subagents(monkeypatch) -> None:  
     command = build_command()
     assert "--always-approve" in command
     assert "--no-subagents" not in command
+    assert "--leader-socket" not in command
     assert command[command.index("--model") + 1]
     assert command[command.index("--reasoning-effort") + 1]
+
+
+def test_windows_agent_prefers_canonical_native_grok_binary(tmp_path: Path) -> None:
+    from grok_worker.agent_entry import resolve_grok_bin
+
+    native = tmp_path / ".grok" / "bin" / "grok.exe"
+    native.parent.mkdir(parents=True)
+    native.touch()
+
+    resolved = resolve_grok_bin(
+        platform="nt", home=tmp_path, path_lookup=lambda _name: "grok.CMD"
+    )
+
+    assert resolved == str(native)
+
+
+def test_agent_launch_is_silent_on_windows(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import grok_worker.agent_entry as agent_entry
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        if "inspect" in command:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({}))
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("GROK_WORKER_LIFECYCLE", "1")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", "grok")
+    monkeypatch.setattr(agent_entry.subprocess, "run", fake_run)
+
+    assert agent_entry.main() == 0
+    assert captured["check"] is False
+    assert captured["stdin"] is not None
+    assert captured["stdout"] is not None
+    assert captured["stderr"] is not None
+    child_env = captured["env"]
+    if os.name == "nt":
+        assert child_env["GROK_MANAGED_BY_NPM"] == "1"
+        assert captured["creationflags"] == subprocess.CREATE_NO_WINDOW
+    startup_info = captured["startupinfo"]
+    if os.name == "nt":
+        assert isinstance(startup_info, subprocess.STARTUPINFO)
+        assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert startup_info.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert startup_info is None
+
+
+def test_grok_environment_probe_decodes_utf8_explicitly(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    from grok_worker.run_config import check_grok_environment
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout='{"label":"中文"}', stderr="")
+
+    monkeypatch.setattr("grok_worker.run_config.subprocess.run", fake_run)
+
+    assert check_grok_environment("grok", cwd=tmp_path, environ={}) is None
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
 
 
 def test_agent_can_explicitly_disable_subagents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -164,6 +236,22 @@ def test_native_command_uses_configured_grok_binary(monkeypatch) -> None:  # typ
     from grok_worker.run_config import default_grok_bin
 
     assert default_grok_bin() == "/opt/tools/custom-grok"
+
+
+def test_native_backend_prefers_canonical_windows_grok_binary(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    import grok_worker.run_config as run_config
+
+    native = tmp_path / ".grok" / "bin" / "grok.exe"
+    native.parent.mkdir(parents=True)
+    native.touch()
+    monkeypatch.delenv("GROK_WORKER_GROK_BIN", raising=False)
+    monkeypatch.setattr(run_config.sys, "platform", "win32")
+    monkeypatch.setattr(run_config.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(run_config, "which", lambda _name: "grok.CMD")
+
+    assert run_config.default_grok_bin() == str(native)
 
 
 def test_native_analysis_is_os_sandboxed_read_only(
@@ -205,6 +293,7 @@ def test_mcp_config_is_optional_in_acpx_command(tmp_path: Path) -> None:
         source=tmp_path,
         prompt="review",
         backend="acp",
+        acpx_bin="acpx",
         mcp_config=None,
         model="test-model",
     )
@@ -226,6 +315,13 @@ def test_skill_uses_detached_event_first_default_for_codex() -> None:
     assert "--wait-seconds 300" in text
     assert "write_stdin" in text
     assert "one dispatcher-scoped watch" in text.lower()
+
+
+def test_skill_has_one_native_one_shot_default_on_windows() -> None:
+    text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "native Grok Build headless on every platform" in text
+    assert "defaults to `--backend native` on every platform" in text
+    assert "managed ACP path on Windows" not in text
 
 
 def test_source_checkout_launcher_has_no_host_fallback() -> None:

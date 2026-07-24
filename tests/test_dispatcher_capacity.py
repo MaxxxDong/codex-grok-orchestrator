@@ -5,6 +5,8 @@ Uses temp shared cache and FileLock only — no real Grok sessions.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,7 +34,25 @@ from grok_worker.paths import meta_path
 from tests.subprocess_concurrency import run_barrier_workers, start_crash_holder, wait_for_path
 
 
-def test_max_concurrent_default_remains_ten() -> None:
+def _directory_link_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory symlink creation is unavailable")
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+        creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+    )
+    if result.returncode != 0:
+        pytest.skip("directory junction creation is unavailable")
+
+
+def test_max_concurrent_default_remains_10() -> None:
     assert MAX_CONCURRENT_WORKERS == 10
 
 
@@ -42,40 +62,55 @@ def test_slot_lock_paths_are_fixed_under_dispatcher_hash(tmp_path: Path) -> None
     did = "dispatcher-alpha"
     dig = hash_identity(did)
     p0 = slot_lock_path(shared, did, 0)
-    plast = slot_lock_path(shared, did, MAX_CONCURRENT_WORKERS - 1)
+    p9 = slot_lock_path(shared, did, 9)
+    p23 = slot_lock_path(shared, did, 23)
     assert dig in str(p0)
     assert p0.name == "00.lock"
-    assert plast.name == f"{MAX_CONCURRENT_WORKERS - 1:02d}.lock"
+    assert p9.name == "09.lock"
+    assert p23.name == "23.lock"
     assert "slots" in p0.parts
     with pytest.raises(ValueError):
-        slot_lock_path(shared, did, MAX_CONCURRENT_WORKERS)
+        slot_lock_path(shared, did, -1)
 
 
-def test_all_slots_block_next(tmp_path: Path) -> None:
+def test_configured_dispatcher_limit_can_reserve_24_slots(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    held = [try_acquire_slot(shared, "wide-dispatcher", limit=24) for _ in range(24)]
+    try:
+        assert count_held_slots(shared, "wide-dispatcher", limit=24) == 24
+        with pytest.raises(DispatcherConcurrencyError):
+            try_acquire_slot(shared, "wide-dispatcher", limit=24)
+    finally:
+        for lock in held:
+            lock.release()
+
+
+def test_ten_slots_block_eleventh(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "cap-d"
     held: list[FileLock] = []
-    for _ in range(MAX_CONCURRENT_WORKERS):
-        held.append(try_acquire_slot(shared, did))
-    assert count_held_slots(shared, did) == MAX_CONCURRENT_WORKERS
+    for _ in range(10):
+        held.append(try_acquire_slot(shared, did, limit=10))
+    assert count_held_slots(shared, did) == 10
     with pytest.raises(DispatcherConcurrencyError) as excinfo:
-        try_acquire_slot(shared, did)
+        try_acquire_slot(shared, did, limit=10)
     assert excinfo.value.code == DISPATCHER_CONCURRENCY_BUSY
     assert DISPATCHER_CONCURRENCY_BUSY in str(excinfo.value)
-    assert excinfo.value.active == MAX_CONCURRENT_WORKERS
-    assert excinfo.value.limit == MAX_CONCURRENT_WORKERS
+    assert excinfo.value.active == 10
+    assert excinfo.value.limit == 10
     for lock in held:
         lock.release()
     assert count_held_slots(shared, did) == 0
-    free = try_acquire_slot(shared, did)
+    free = try_acquire_slot(shared, did, limit=10)
     free.release()
 
 
 def test_other_dispatcher_does_not_block(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()
-    held = [try_acquire_slot(shared, "other-disp") for _ in range(MAX_CONCURRENT_WORKERS)]
+    held = [try_acquire_slot(shared, "other-disp", limit=10) for _ in range(10)]
     # Different dispatcher has full budget.
     mine = reserve_dispatcher_capacity(shared, "mine", mode="analysis")
     assert count_held_slots(shared, "mine") == 1
@@ -90,7 +125,7 @@ def test_session_open_meta_does_not_consume_flock_slot(tmp_path: Path) -> None:
     shared.mkdir()
     root = tmp_path / "root"
     root.mkdir()
-    for i in range(MAX_CONCURRENT_WORKERS):
+    for i in range(10):
         clone = root / f"s{i}"
         clone.mkdir()
         now = utc_now()
@@ -110,7 +145,7 @@ def test_session_open_meta_does_not_consume_flock_slot(tmp_path: Path) -> None:
 
         meta_dir(clone).mkdir(parents=True, exist_ok=True)
         meta.write(meta_path(clone))
-    # Idle session rows do not consume any OS slots.
+    # All ten OS slots still free.
     assert count_held_slots(shared, "sess") == 0
     lease = reserve_dispatcher_capacity(shared, "sess", mode="analysis")
     lease.release()
@@ -209,9 +244,9 @@ def test_root_scoped_without_dispatcher_id_still_limits_one_root(
             managed_by=MANAGED_BY,
         )
         meta.write(meta_path(c))
-    assert count_active_workers(tmp_roots["disposable"]) == MAX_CONCURRENT_WORKERS
+    assert count_active_workers(tmp_roots["disposable"]) == 10
     with pytest.raises(ConcurrencyError):
-        enforce_concurrency(tmp_roots["disposable"], MAX_CONCURRENT_WORKERS)
+        enforce_concurrency(tmp_roots["disposable"], 10)
 
 
 def test_session_open_not_in_root_scoped_active_count(tmp_roots: dict[str, Path]) -> None:
@@ -240,7 +275,7 @@ def test_session_open_not_in_root_scoped_active_count(tmp_roots: dict[str, Path]
 
 
 def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) -> None:
-    """One process beyond capacity gets BUSY without oversubscription."""
+    """Eleven concurrent processes: exactly ten acquire, one gets BUSY."""
     shared = tmp_path / "shared"
     shared.mkdir()
     did = "mp-slots"
@@ -252,10 +287,10 @@ def test_multiprocess_two_roots_cannot_oversubscribe_final_slot(tmp_path: Path) 
     )
     ok = [r for r in results if r["ok"]]
     busy = [r for r in results if not r["ok"]]
-    assert len(ok) == MAX_CONCURRENT_WORKERS
+    assert len(ok) == 10
     assert len(busy) == 1
     assert busy[0]["code"] == DISPATCHER_CONCURRENCY_BUSY
-    assert busy[0]["active"] == MAX_CONCURRENT_WORKERS
+    assert busy[0]["active"] == 10
 
 
 def test_multiprocess_same_source_implementation_exclusive(tmp_path: Path) -> None:
@@ -329,7 +364,7 @@ def test_shared_cache_root_symlink_fail_closed(tmp_path: Path) -> None:
     real_cache = tmp_path / "real-cache"
     real_cache.mkdir()
     shared = tmp_path / "shared-link"
-    shared.symlink_to(real_cache)
+    _directory_link_or_skip(shared, real_cache)
     with pytest.raises(DispatcherPathError, match="shared cache root is a symlink"):
         try_acquire_slot(shared, "sym-cache", limit=10)
 
@@ -342,7 +377,7 @@ def test_dispatchers_directory_symlink_fail_closed(tmp_path: Path) -> None:
     shared.mkdir()
     outside = tmp_path / "outside-dispatchers"
     outside.mkdir()
-    (shared / DISPATCHER_REGISTRY_DIR).symlink_to(outside)
+    _directory_link_or_skip(shared / DISPATCHER_REGISTRY_DIR, outside)
     with pytest.raises(DispatcherPathError, match="symlink"):
         try_acquire_slot(shared, "sym-disp", limit=10)
     # Errors must not leak secret-like destinations.
@@ -364,7 +399,7 @@ def test_slots_directory_symlink_fail_closed(tmp_path: Path) -> None:
     ddir.mkdir(parents=True)
     outside = tmp_path / "evil-slots"
     outside.mkdir()
-    (ddir / "slots").symlink_to(outside)
+    _directory_link_or_skip(ddir / "slots", outside)
     with pytest.raises(DispatcherPathError, match="symlink"):
         try_acquire_slot(shared, "sym-slots", limit=10)
 
@@ -380,7 +415,7 @@ def test_sources_directory_symlink_fail_closed(tmp_path: Path) -> None:
     ddir.mkdir(parents=True)
     outside = tmp_path / "evil-sources"
     outside.mkdir()
-    (ddir / "sources").symlink_to(outside)
+    _directory_link_or_skip(ddir / "sources", outside)
     src = tmp_path / "src"
     src.mkdir()
     with pytest.raises(DispatcherPathError, match="symlink"):
@@ -398,7 +433,10 @@ def test_individual_slot_lock_symlink_fail_closed(tmp_path: Path) -> None:
         path.unlink()
     victim = tmp_path / "victim.lock"
     victim.write_text("secret-token-xyz\n", encoding="utf-8")
-    path.symlink_to(victim)
+    try:
+        path.symlink_to(victim)
+    except OSError:
+        pytest.skip("file symlink creation is unavailable for this Windows token")
     with pytest.raises((DispatcherPathError, RuntimeError), match="symlink"):
         try_acquire_slot(shared, "sym-lock", limit=10)
     # Victim content must not appear in error text.
@@ -423,7 +461,10 @@ def test_individual_source_lock_symlink_fail_closed(tmp_path: Path) -> None:
         path.unlink()
     victim = tmp_path / "src-victim.lock"
     victim.write_text("env-secret\n", encoding="utf-8")
-    path.symlink_to(victim)
+    try:
+        path.symlink_to(victim)
+    except OSError:
+        pytest.skip("file symlink creation is unavailable for this Windows token")
     with pytest.raises((DispatcherPathError, RuntimeError), match="symlink"):
         try_acquire_source_lock(shared, "sym-srclock", path_s)
 
@@ -439,6 +480,6 @@ def test_hash_dir_symlink_fail_closed(tmp_path: Path) -> None:
     dig = hash_identity("sym-hash")
     outside = tmp_path / "escaped-hash"
     outside.mkdir()
-    (reg / dig).symlink_to(outside)
+    _directory_link_or_skip(reg / dig, outside)
     with pytest.raises(DispatcherPathError, match="symlink"):
         try_acquire_slot(shared, "sym-hash", limit=10)

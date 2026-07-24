@@ -10,11 +10,77 @@ worker state.
 |---|---|---|
 | `.grok-worker/lifecycle.json` | Authoritative worker state | — |
 | `$CACHE/notifications/completion-events.jsonl` | Notification index only | Second state source; sensitive payloads |
+| `$CACHE/run-events/<run-hash>.jsonl` | Small durable per-run notification receipt, governed by cache TTL/LRU | Prompt, token, env, or file content storage |
 | `.grok-worker/progress.json` | Advisory activity hints | Override lifecycle phase/state |
 | External three-file artifact | Verified success evidence | Fake readiness via progress alone |
 
 Never treat the notification log as truth for GC, capacity, or success. Always
 re-read lifecycle (and artifacts when needed).
+
+## Native Windows runtime
+
+Windows 10/11 is supported by the Python package. Lifecycle, cache, and config
+transactions use shared/exclusive `LockFileEx` byte-range locks through the
+standard library; per-worker lock files live under the disposable root's hidden
+`.grok-worker-locks` directory so a verified clone can be removed after success.
+
+Install `grok-worker`, `grok-worker-agent`, Node.js, PowerShell 7 (`pwsh`), and
+Grok Build on the native Windows `PATH`. Before the first worker, build the
+immutable grok-worker-owned acpx runtime from the pinned `acpx 0.12.0` package:
+
+```powershell
+grok-worker acpx-runtime-install
+grok-worker acpx-runtime-status
+```
+
+The installer verifies the exact upstream JavaScript hash, copies the package
+under `%LOCALAPPDATA%\grok-worker\runtimes\acpx`, applies the audited Windows
+terminal patch to that copy, and writes a hash-verified `current.json` pointer.
+It never edits the global npm package. Normal one-shot and named-session runs
+resolve only this managed runtime and fail closed if it is missing, corrupted,
+or bound to a different PowerShell 7 executable. `--acpx-bin` is an explicit
+test/development override; there is no silent fallback to global acpx or WSL.
+
+The managed runtime routes PowerShell terminal work and process snapshots
+through PowerShell 7, explicitly sets UTF-8 for PowerShell output, records the
+machine OEM code page and adaptively transcodes captured UTF-8/OEM `cmd` output
+without changing redirection semantics, batches
+concurrent CIM snapshots, uses Windows process-tree cleanup for cancellation,
+and never uses Windows `detached` terminal launches. These constraints preserve
+ACP pipes and prevent transient console windows from taking focus.
+Worker subprocesses also inherit Python UTF-8 mode (`PYTHONUTF8=1` and
+`PYTHONIOENCODING=utf-8`) so redirected Unicode logs do not fall back to GBK.
+
+The native runtime reads the user's normal Grok configuration directly from:
+
+```text
+%USERPROFILE%\.grok\config.toml
+```
+
+Do not maintain a second WSL Grok configuration for a native deployment. Keep
+backup files if required, but only the Windows path above is an active source of
+provider/model settings.
+
+For parallel dispatch, pass the same positive `--max-workers` value to all
+one-shot and named-session starts sharing a disposable root, or set
+`GROK_WORKER_MAX_WORKERS`. The default is 10; higher values change admission,
+not the independent disposable-byte cap or upstream provider rate limits.
+Clone admission is protected by a short root lock, while worker execution and
+fingerprint-distinct dependency work remain concurrent. Same-fingerprint uv
+preparation is serialized once and then reused by all admitted workers. Locked
+nested npm projects run `npm ci` in the clone with the shared npm download cache;
+the source checkout's `node_modules` is never copied or linked.
+
+On Windows, the Grok agent launcher uses hidden `STARTUPINFO` window state when
+invoking the configured executable. This keeps `.cmd`-based Grok installations
+silent without detaching the ACP stdin/stdout pipes, preserving the same
+foreground lifecycle, cancellation, timeout, and process-tree cleanup behavior.
+
+`--no-prepare-deps` disables environment creation completely. Its injected
+contract forbids `uv`, `uv run`, `uv sync`, and `pip`, because even
+`uv run --no-sync` creates a clone-local `.venv` when
+`UV_PROJECT_ENVIRONMENT` is absent. Tasks using this option must rely on
+pre-existing system tools or an explicitly supplied absolute interpreter.
 
 ## 1. Completion-event notifications
 
@@ -22,10 +88,12 @@ re-read lifecycle (and artifacts when needed).
 
 When a managed worker reaches a terminal state (`success`, `failed`, `keep`, …),
 the runner appends an immediate `terminal` JSON line. After one-shot session and
-clone cleanup finishes, it appends a distinct `settled` line under:
+clone cleanup finishes, it appends a distinct `settled` line to the global index
+and, for modern runs, a small hash-addressed per-run receipt:
 
 ```text
 $SHARED_CACHE_ROOT/notifications/completion-events.jsonl
+$SHARED_CACHE_ROOT/run-events/<sha256(run_id)>.jsonl
 ```
 
 Shared cache root resolution uses `GROK_WORKER_CACHE_ROOT`, then
@@ -62,9 +130,10 @@ file contents.
 - Re-finalize / re-reconcile of the same terminal pair does not append again.
 - Appends take an exclusive lock beside the log; writes are full JSON lines with
   flush/fsync so concurrent writers do not leave half-line JSON.
-- **Best-effort only**: notification I/O or serialization failures never reverse
-  an already-persisted lifecycle terminal state, `RunOutcome`, artifact path, or
-  GC dead-worker reconcile. Callers treat emit as advisory.
+- Notification I/O or serialization failures never reverse an already-persisted
+  lifecycle result or artifact. However, a successful clone is deleted only after
+  its terminal run receipt is durable. If persistence fails, the clone is retained
+  and run-specific watch surfaces the lifecycle fault within its fallback interval.
 - Readers **discard** malformed JSONL rows, empty objects (`{}`), missing
   required pointer fields, and wrong-typed values; they never surface incomplete
   rows as events.
@@ -122,13 +191,18 @@ grok-worker watch \
   --run-id "$RUN_ID" \
   --after "$CURSOR" \
   --wait-seconds 300 \
+  --until-settled \
   --json
 ```
 
-The command returns immediately with `kind=events` when a matching terminal,
-settled, or attention event appears. Otherwise it returns one `kind=heartbeat`
-snapshot after the bounded wait. Feed `next_cursor` into the next call. One
-dispatcher-scoped watch can cover a parallel wave. This command never reads full
+For one `run_id`, watch reads the small per-run receipt. Dispatcher/global waits
+reparse the global index only when its size or modification time changes, rather
+than on every 50 ms wake check. `--until-settled` keeps the same event wait through terminal and
+cleanup settlement; a running attention event still returns immediately. Without
+that flag, the command returns on the first matching terminal, settled, or
+attention event. Otherwise it returns one `kind=heartbeat` snapshot after the
+bounded wait. Feed `next_cursor` into the next call. One dispatcher-scoped watch
+without `--until-settled` can cover a parallel wave. This command never reads full
 logs and never mutates, restarts, or cleans workers.
 
 Exact duplicate attention events are suppressed per run and reason code. A
@@ -158,10 +232,10 @@ emits one `running/attention` event containing only a reason code. It does not
 terminate the process: Grok may recover, and a later terminal/settled event still
 defines the outcome. Plugin-level MCP warnings do not match this classifier.
 
-On `terminal/success`, consume the verified artifact and wait once more for
-`settled`. On failure or `attention_required=true`, inspect authoritative
-lifecycle and only then a bounded log tail. Do not repeatedly read unchanged
-status/log output between heartbeats.
+With `--until-settled`, consume the verified artifact only when the response says
+`settled=true`. On a running attention event, inspect authoritative lifecycle and
+only then a bounded log tail. Do not repeatedly read unchanged status/log output
+between heartbeats.
 
 ## 1b. Per-dispatcher concurrency (OS flock slot leases)
 
@@ -196,8 +270,10 @@ edits a standalone clone. Root remains the sole integration owner and must
 review/serialize acceptance when changes overlap. A different dispatcher never
 blocks merely because it uses the same source path.
 
-There is **no** persistent `roots.json` registry or advisory slot-pointer JSON;
-the only reservation primitive is the held OS flock.
+There is no persistent reservation or advisory slot-pointer JSON; the only
+capacity reservation primitive is the held OS flock. A separate bounded
+`runtime/disposable-roots.json` registry exists only for read-only cross-root
+health discovery and never grants capacity or proves liveness.
 
 ## 1c. Timeouts and health
 
@@ -210,7 +286,9 @@ the only reservation primitive is the held OS flock.
 Health inspection records lifecycle, bounded non-symlink workspace activity,
 the fixed advisory progress step, result/artifact readiness, PID identity, and
 CPU/RSS when available. It does **not** terminate, interrupt, restart, or mutate a
-running worker merely because the interval elapsed. The foreground runner owns
+running worker merely because the interval elapsed. With no root argument it
+aggregates the bounded registry under the shared cache; an explicit
+`--disposable-root` keeps the query scoped to one root. The foreground runner owns
 termination: it reads `.grok-worker/lease.json`, renews the inactivity deadline
 from managed Grok session events, progress/result writes, agent-log growth, and
 bounded workspace activity, and terminates the backend process tree only when the
@@ -270,8 +348,9 @@ lifecycle remains the authority for worker state and terminal outcome.
 
 ## 1e. Backend and startup recovery
 
-- `grok-worker run` defaults to `--backend native`, which directly invokes Grok
-  Build headless with a prompt file and JSON output.
+- `grok-worker run` defaults to `--backend native` on every platform. Native
+  directly invokes Grok Build headless with a prompt file and JSON output;
+  Windows terminal and file tools are verified with Grok Build 0.2.103.
 - `--backend acp` retains the previous transport. Named sessions remain ACP-only
   in 0.5.x.
 - Native one-shot execution uses the user's normal `HOME` and `~/.grok`. Plugins,
@@ -426,9 +505,17 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.7.2`. Lifecycle and artifact formats remain
+The current public release is `0.8.0`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
+
+### 0.8.0 Windows lifecycle efficiency
+
+Native workers have no public model-turn cap. Recoverable budget stops continue
+inside the same session, while repeated no-progress failures stop deterministically.
+`watch --until-settled` consumes terminal and cleanup events in one wait. Durable
+per-run receipts, multi-root health, runner-owned final gates, and bounded Windows
+snapshot commands reduce polling and reject unusable work before provider launch.
 
 ### 0.7.2 CI portability
 
@@ -455,7 +542,6 @@ grok-worker run --detach \
   --execution-manifest ./examples/task-manifest.json \
   --disable-web-search \
   --disallowed-tool WebSearch \
-  --max-turns 80 \
   --stall-turns 8 \
   --stall-seconds 900
 ```
@@ -477,6 +563,22 @@ grok-worker run --source "$REPO" --mode implementation \
 grok-worker run --source "$REPO" --mode implementation \
   --task-id my-task --prompt-file ./finalize.md --continue
 ```
+
+Native budget exhaustion (`max_tokens_truncation` or `max_turns_reached`) uses the
+same mechanism automatically inside one lifecycle. It does not synthesize success:
+the continued turn must still produce a valid result and real verification.
+
+When `execution.finalGates` is nonempty, the commands are omitted from the Grok
+prompt and executed exactly once by the runner after native structured output.
+The runner stores atomic `.grok-output/verification/runner-gate-*` logs. Gates
+share the remaining hard-time budget, stop on first failure, and their observed
+exit codes participate in the existing fail-closed result gate. Final metrics are
+persisted only after this phase and distinguish backend, verification, and total
+duration.
+
+Final gates start at the clone root. A bare task name such as `pytest` or
+`testDebugUnitTest` is rejected before clone creation; use an explicit executable
+command and repository wrapper/working directory instead.
 
 Disable runner-owned JSON Schema result capture (ACP-like disk `result.json`):
 

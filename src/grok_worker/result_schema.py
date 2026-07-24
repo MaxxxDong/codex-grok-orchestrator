@@ -153,6 +153,12 @@ def write_captured_analysis_result(clone: Path, agent_log: Path | None) -> bool:
     response = agent_log.read_text(encoding="utf-8", errors="replace").strip()
     if not response:
         return False
+    try:
+        envelope = json.loads(response)
+    except json.JSONDecodeError:
+        envelope = None
+    if isinstance(envelope, dict) and str(envelope.get("stopReason", "")).casefold() == "cancelled":
+        raise ResultError("analysis backend returned stopReason=Cancelled")
     output = clone / OUTPUT_DIR_NAME
     if output.is_symlink():
         raise ResultError(f"refusing symlink output directory: {output}")

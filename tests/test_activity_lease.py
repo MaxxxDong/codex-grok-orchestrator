@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -44,6 +46,50 @@ def test_activity_probe_uses_native_grok_home(tmp_path: Path) -> None:
     )
 
     assert probe.session_root.is_relative_to(home / ".grok" / "sessions")
+
+
+def test_activity_lease_uses_hidden_windows_launch_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clone = _clone(tmp_path)
+    captured: dict[str, object] = {}
+
+    class CompletedProcess:
+        pid = 12345
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(command: list[str], **kwargs: object) -> CompletedProcess:
+        captured["command"] = command
+        captured.update(kwargs)
+        return CompletedProcess()
+
+    monkeypatch.setattr("grok_worker.activity_lease.subprocess.Popen", fake_popen)
+    result = run_with_activity_lease(
+        ["grok", "--version"],
+        clone=clone,
+        log=tmp_path / "agent.log",
+        env={},
+        idle_timeout_seconds=10,
+        hard_timeout_seconds=20,
+    )
+
+    assert result.exit_code == 0
+    if os.name == "nt":
+        startup_info = captured["startupinfo"]
+        assert isinstance(startup_info, subprocess.STARTUPINFO)
+        assert startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert startup_info.wShowWindow == subprocess.SW_HIDE
+        assert int(captured["creationflags"]) & subprocess.CREATE_NO_WINDOW
+        assert captured["start_new_session"] is False
+    else:
+        assert captured["startupinfo"] is None
+        assert captured["creationflags"] == 0
+        assert captured["start_new_session"] is True
 
 
 def test_policy_can_change_while_lease_is_live(tmp_path: Path) -> None:
@@ -234,7 +280,10 @@ def test_lease_reader_refuses_symlink_leaf(tmp_path: Path) -> None:
     target = tmp_path / "outside.json"
     target.write_text("{}", encoding="utf-8")
     path = meta_dir(clone) / "lease.json"
-    path.symlink_to(target)
+    try:
+        path.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable for this Windows token")
 
     with pytest.raises(LeaseError, match="symlink"):
         read_lease(clone)
@@ -244,7 +293,10 @@ def test_lease_lock_refuses_symlink_leaf(tmp_path: Path) -> None:
     clone = _clone(tmp_path)
     target = tmp_path / "outside.lock"
     target.write_text("do not touch", encoding="utf-8")
-    (meta_dir(clone) / "lease.lock").symlink_to(target)
+    try:
+        (meta_dir(clone) / "lease.lock").symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable for this Windows token")
 
     with pytest.raises(RuntimeError, match="symlink"):
         initialize_lease(clone, idle_timeout_seconds=30, hard_timeout_seconds=60)

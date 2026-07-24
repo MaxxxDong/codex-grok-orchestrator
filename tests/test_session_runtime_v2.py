@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -91,6 +92,95 @@ def test_named_session_start_followup_finalize(tmp_path: Path, path_with_fake_ac
     assert worker["session"]["closed"] is True
     assert worker["session"]["promptCount"] == 2
     assert len(receipt["metrics"]) == 2
+
+
+def test_named_session_prepares_dependencies_once_under_prompt_lease(
+    tmp_path: Path, path_with_fake_acpx: Path
+) -> None:
+    from grok_worker.session_process import SessionConfig
+    from grok_worker.session_runtime import start_session
+
+    source = tmp_path / "source"
+    init_git_repo(source)
+    manifest = tmp_path / "task.json"
+    _write_manifest(manifest, "prepare one shared environment")
+    calls = 0
+
+    def prepare_once(_clone: Path, cache: Path) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {
+            "UV_CACHE_DIR": str(cache / "uv"),
+            "UV_PROJECT_ENVIRONMENT": str(cache / "venvs" / "test"),
+        }
+
+    cfg = SessionConfig(
+        source=source,
+        manifest_file=manifest,
+        role="implement",
+        mode="implementation",
+        disposable_root=tmp_path / "disposable",
+        artifact_root=tmp_path / "artifacts",
+        shared_cache_root=tmp_path / "cache",
+        acpx_bin=str(path_with_fake_acpx),
+        prepare_deps=True,
+    )
+    with mock.patch(
+        "grok_worker.session_runtime.prepare_shared_env", side_effect=prepare_once, create=True
+    ):
+        with mock.patch("grok_worker.session_process.prepare_shared_env", side_effect=prepare_once):
+            started = start_session(cfg)
+
+    assert started.state == "session_open"
+    assert calls == 1
+
+
+def test_named_session_config_rejects_non_positive_worker_limit(tmp_path: Path) -> None:
+    from grok_worker.session_process import SessionConfig
+
+    with pytest.raises(ValueError, match="max_workers must be at least 1"):
+        SessionConfig(
+            source=tmp_path,
+            manifest_file=tmp_path / "task.json",
+            role="implement",
+            mode="implementation",
+            disposable_root=tmp_path / "disposable",
+            artifact_root=tmp_path / "artifacts",
+            shared_cache_root=tmp_path / "cache",
+            max_workers=0,
+        )
+
+
+def test_named_session_without_dependency_preparation_forbids_uv(
+    tmp_path: Path, path_with_fake_acpx: Path
+) -> None:
+    from grok_worker.session_process import SessionConfig
+    from grok_worker.session_runtime import start_session
+
+    source = tmp_path / "source"
+    init_git_repo(source)
+    manifest = tmp_path / "task.json"
+    _write_manifest(manifest, "use existing tools only")
+    cfg = SessionConfig(
+        source=source,
+        manifest_file=manifest,
+        role="implement",
+        mode="implementation",
+        disposable_root=tmp_path / "disposable",
+        artifact_root=tmp_path / "artifacts",
+        shared_cache_root=tmp_path / "cache",
+        acpx_bin=str(path_with_fake_acpx),
+        prepare_deps=False,
+    )
+
+    started = start_session(cfg)
+    prompt = (Path(started.clone_path or "") / ".grok-worker" / "prompt-001.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Dependency preparation is disabled" in prompt
+    assert "Do not run uv, uv run, uv sync, pip" in prompt
+    assert "Always use: uv run --no-sync" not in prompt
 
 
 def test_session_state_read_rejects_unknown_fields(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import time
 from pathlib import Path
 
 
@@ -121,26 +122,57 @@ def safe_rmtree(target: Path, *, disposable_root: Path, protected: list[Path]) -
             return
         raise SafetyError(f"not a directory or file: {verified}")
 
-    if getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-        # Python with fd-based rmtree (dir_fd / openat)
-        def _onexc(func: object, path: str, exc: BaseException) -> None:  # noqa: ARG001
+    if getattr(shutil.rmtree, "avoids_symlink_attacks", False) or os.name == "nt":
+        # POSIX uses fd-relative traversal. Windows has no dir_fd variant, but
+        # Python 3.8+ rmtree does not traverse directory junctions and its
+        # recursive entry point refuses a path that became a symlink. The root
+        # identity and reparse state were rechecked immediately above.
+        def _onexc(func: object, path: str, exc: BaseException) -> None:
+            if os.name == "nt" and isinstance(exc, PermissionError) and callable(func):
+                candidate = Path(path).absolute()
+                try:
+                    candidate.relative_to(verified)
+                except ValueError as path_exc:
+                    raise SafetyError(f"rmtree callback escaped target: {candidate}") from path_exc
+                if getattr(exc, "winerror", None) in {32, 33}:
+                    raise exc
+                candidate.chmod(stat.S_IWRITE)
+                func(path)
+                return
             raise SafetyError(f"rmtree failed at {path}: {exc}") from exc
 
-        try:
-            shutil.rmtree(verified, onexc=_onexc)
-        except TypeError:
-            # older signature
-            def _onerror(
-                func: object,
-                path: str,
-                exc_info: object,  # noqa: ARG001
-            ) -> None:
-                raise SafetyError(f"rmtree failed at {path}")
+        for attempt in range(30 if os.name == "nt" else 1):
+            try:
+                shutil.rmtree(verified, onexc=_onexc)
+                break
+            except TypeError:
+                # older signature
+                def _onerror(
+                    func: object,
+                    path: str,
+                    exc_info: object,  # noqa: ARG001
+                ) -> None:
+                    raise SafetyError(f"rmtree failed at {path}")
 
-            shutil.rmtree(verified, onerror=_onerror)
+                shutil.rmtree(verified, onerror=_onerror)
+                break
+            except PermissionError as exc:
+                if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                    raise SafetyError(f"rmtree failed at {verified}: {exc}") from exc
+                if not verified.exists():
+                    break
+                current_st = verified.lstat()
+                if verified.is_symlink() or not _same_file(expected_st, current_st):
+                    raise SafetyError(f"TOCTOU during rmtree retry: {verified}") from exc
+                if attempt == 29:
+                    raise SafetyError(
+                        f"rmtree remained locked after bounded retries: {verified}: {exc}"
+                    ) from exc
+                time.sleep(0.1)
         return
 
-    # Fail closed when fd-based protection is unavailable
+    # Fail closed when neither fd-relative POSIX deletion nor Windows' native
+    # non-following rmtree behavior is available.
     raise SafetyError(
         "safe_rmtree requires shutil.rmtree.avoids_symlink_attacks; refusing unsafe deletion"
     )

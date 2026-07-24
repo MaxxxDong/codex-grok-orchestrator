@@ -79,6 +79,7 @@ class CloneStatus:
     lease_revision: int | None = None
     result_ready: bool = False
     artifact_ready: bool = False
+    terminal_event_ready: bool = False
     resources: dict[str, float | int | None] = field(default_factory=empty_resources)
 
 
@@ -447,6 +448,7 @@ def build_clone_summary(
         "lease_revision": lease_revision,
         "result_ready": _result_ready(clone),
         "artifact_ready": _artifact_ready(meta),
+        "terminal_event_ready": meta.terminal_event_ready,
         "resources": _resources_for(meta, is_act),
     }
 
@@ -553,6 +555,7 @@ def collect_status(
                     ),
                     result_ready=bool(summary["result_ready"]),
                     artifact_ready=bool(summary["artifact_ready"]),
+                    terminal_event_ready=bool(summary["terminal_event_ready"]),
                     resources=resources_val,
                 )
             )

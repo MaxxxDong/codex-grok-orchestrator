@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from shutil import which
 
+from grok_worker.acpx_runtime import resolve_managed_acpx_command
 from grok_worker.cache_policy import DEFAULT_CACHE_MAX_BYTES, DEFAULT_CACHE_TTL_HOURS
 from grok_worker.constants import (
     DEFAULT_ACPX_TIMEOUT,
@@ -35,7 +37,7 @@ class RunConfig:
     timeout: int = DEFAULT_ACPX_TIMEOUT
     hard_timeout: int | None = DEFAULT_HARD_TIMEOUT
     task_id: str | None = None
-    acpx_bin: str = "acpx"
+    acpx_bin: str | None = None
     agent_bin: str | None = None
     mcp_config: str | None = None
     model: str = ""
@@ -59,7 +61,6 @@ class RunConfig:
     # Opt-in pure-code tool constraints (native flags only; no prefill profiles).
     disable_web_search: bool = False
     disallowed_tools: list[str] = field(default_factory=list)
-    max_turns: int | None = None
     # Native same-task continuation (explicit; not ACP).
     continue_task: bool = False
     # Persist continuation metadata after a successful native keep run.
@@ -73,6 +74,8 @@ class RunConfig:
     native_json_schema_result: bool = True
 
     def __post_init__(self) -> None:
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
         if not self.model:
             self.model = default_model()
         if not self.reasoning_effort:
@@ -81,8 +84,6 @@ class RunConfig:
             self.include_dirty_paths = []
         if self.backend not in {"native", "acp"}:
             raise ValueError("backend must be native or acp")
-        if self.max_turns is not None and self.max_turns < 1:
-            raise ValueError("max_turns must be >= 1 when set")
         if self.continue_task and self.backend != "native":
             raise ValueError("continue_task requires backend=native")
         if self.disallowed_tools is None:
@@ -93,8 +94,20 @@ class RunConfig:
             disable_web_search=self.disable_web_search,
             disallowed_tools=self.disallowed_tools,
             allow_subagents=self.allow_subagents,
-            max_turns=self.max_turns,
         )
+
+    def effective_run_policy(self) -> dict[str, object]:
+        """Return the non-sensitive runner policy actually applied to this run."""
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "model_turn_limit": None,
+            "output_token_limit": "not_configured_by_grok_worker",
+            "idle_timeout_seconds": self.timeout,
+            "hard_timeout_seconds": self.hard_timeout,
+            "tool_policy": self.tool_policy().to_dict(),
+        }
 
 
 @dataclass
@@ -112,24 +125,59 @@ class RunOutcome:
 def default_agent_bin() -> str:
     here = Path(__file__).resolve()
     # src/grok_worker/run_config.py → parents[2] = package root with bin/
-    candidate = here.parents[2] / "bin" / "grok-acp-worker"
-    if candidate.is_file():
-        return str(candidate)
     installed = which("grok-worker-agent") or which("grok-acp-worker")
     if installed:
         return installed
+    candidate = (
+        here.parents[2]
+        / "bin"
+        / ("grok-acp-worker.cmd" if sys.platform == "win32" else "grok-acp-worker")
+    )
+    if candidate.is_file():
+        return str(candidate)
     raise FileNotFoundError(
         "cannot locate grok-worker-agent; install the package or pass --agent-bin"
     )
 
 
+def resolve_executable(command: str) -> str:
+    """Resolve PATHEXT launchers on Windows while preserving explicit paths."""
+    candidate = Path(command)
+    if candidate.is_file():
+        return str(candidate)
+    return which(command) or command
+
+
+def resolve_acpx_command(command: str | None) -> list[str]:
+    """Resolve acpx without a Windows batch hop that truncates multiline prompts."""
+    if command is None:
+        if sys.platform == "win32":
+            return resolve_managed_acpx_command()
+        command = "acpx"
+    resolved = Path(resolve_executable(command))
+    if sys.platform == "win32" and resolved.suffix.lower() in {".cmd", ".bat"}:
+        entry = resolved.parent / "node_modules" / "acpx" / "dist" / "cli.js"
+        node = which("node")
+        if entry.is_file() and node:
+            return [node, str(entry)]
+    return [str(resolved)]
+
+
+def normalize_agent_command(command: str) -> str:
+    """Protect native Windows paths from acpx's shell-style backslash parser."""
+    candidate = Path(command)
+    if sys.platform == "win32" and candidate.is_file():
+        return candidate.as_posix()
+    return command
+
+
 def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list[str]:
     cmd = [
-        cfg.acpx_bin,
+        *resolve_acpx_command(cfg.acpx_bin),
         "--cwd",
         str(clone),
         "--agent",
-        agent,
+        normalize_agent_command(agent),
         "--auth-policy",
         "skip",
     ]
@@ -140,7 +188,8 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
             "--model",
             cfg.model,
             "--format",
-            "quiet",
+            "json",
+            "--json-strict",
             "--suppress-reads",
         ]
     )
@@ -154,10 +203,19 @@ def build_acpx_cmd(cfg: RunConfig, clone: Path, agent: str, prompt: str) -> list
     return cmd
 
 
+def default_one_shot_backend() -> str:
+    """Use Grok Build's native headless backend for one-shot work."""
+    return "native"
+
+
 def default_grok_bin() -> str:
     configured = os.environ.get("GROK_WORKER_GROK_BIN")
     if configured:
         return configured
+    if sys.platform == "win32":
+        native = Path.home() / ".grok" / "bin" / "grok.exe"
+        if native.is_file():
+            return str(native)
     configured = which("grok")
     if configured:
         return configured
@@ -173,8 +231,15 @@ def check_grok_environment(grok_bin: str, *, cwd: Path, environ: dict[str, str])
             env=environ,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=10,
+            creationflags=(
+                int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if sys.platform == "win32"
+                else 0
+            ),
         )
     except subprocess.TimeoutExpired:
         return "Grok environment check timed out; continuing to actual launch"

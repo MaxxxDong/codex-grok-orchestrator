@@ -32,6 +32,7 @@ from grok_worker.constants import (
     DEFAULT_FAILURE_RETAIN_HOURS,
     DEFAULT_HARD_TIMEOUT,
     DEFAULT_WATCH_WAIT_SECONDS,
+    MAX_CONCURRENT_WORKERS,
     MAX_EVENT_WAIT_SECONDS,
 )
 from grok_worker.detached import (
@@ -46,7 +47,7 @@ from grok_worker.dispatcher import (
     make_run_id,
 )
 from grok_worker.gc import gc_disposable_root, is_active
-from grok_worker.health import collect_health
+from grok_worker.health import HealthReport, collect_health
 from grok_worker.legacy import LegacyClass, LegacyError, import_legacy, list_unmarked
 from grok_worker.models import WorkerMeta
 from grok_worker.paths import (
@@ -56,6 +57,8 @@ from grok_worker.paths import (
     is_managed_clone,
     meta_path,
 )
+from grok_worker.root_registry import known_disposable_roots
+from grok_worker.run_config import default_one_shot_backend
 from grok_worker.runner import RunConfig, run_worker
 from grok_worker.settings import default_mcp_config, default_model, default_reasoning_effort
 from grok_worker.status import collect_status, format_status_json, format_status_text
@@ -73,7 +76,7 @@ def _resolve_disposable(disposable_root: Path | None, source: Path | None) -> Pa
         return Path(disposable_root).resolve()
     if source is not None:
         return default_disposable_root(Path(source)).resolve()
-    return (Path.cwd() / ".grok-disposable").resolve()
+    return default_disposable_root(Path.cwd()).resolve()
 
 
 def _startup_reason_code(exc: BaseException) -> str:
@@ -188,11 +191,15 @@ def cmd_run(
         "Required for cross-root max-10 enforcement; without it only root-scoped limits apply.",
     ),
     backend: str = typer.Option(
-        "native",
+        default_one_shot_backend(),
         "--backend",
-        help="One-shot backend: native (default) or acp compatibility path",
+        help="One-shot backend: native (default) or ACP compatibility path",
     ),
-    acpx_bin: str = typer.Option("acpx", "--acpx-bin"),
+    acpx_bin: str | None = typer.Option(
+        None,
+        "--acpx-bin",
+        help="Explicit acpx override (default: pinned grok-worker runtime on Windows)",
+    ),
     agent_bin: str | None = typer.Option(None, "--agent-bin"),
     mcp_config: str | None = typer.Option(None, "--mcp-config"),
     model: str | None = typer.Option(None, "--model"),
@@ -207,11 +214,6 @@ def cmd_run(
         None,
         "--disallowed-tool",
         help="Built-in tool name to deny (repeatable); mapped to native --disallowed-tools",
-    ),
-    max_turns: int | None = typer.Option(
-        None,
-        "--max-turns",
-        help="Optional native Grok max agent turns (pathological-loop guard)",
     ),
     continue_task: bool = typer.Option(
         False,
@@ -245,6 +247,13 @@ def cmd_run(
     ),
     failure_retain_hours: int = typer.Option(
         DEFAULT_FAILURE_RETAIN_HOURS, "--failure-retain-hours"
+    ),
+    max_workers: int = typer.Option(
+        MAX_CONCURRENT_WORKERS,
+        "--max-workers",
+        envvar="GROK_WORKER_MAX_WORKERS",
+        min=1,
+        help="Maximum active workers admitted under this disposable root",
     ),
     cap_bytes: int = typer.Option(DEFAULT_CAP_BYTES, "--cap-bytes"),
     no_prepare_deps: bool = typer.Option(False, "--no-prepare-deps"),
@@ -313,9 +322,6 @@ def cmd_run(
             err=True,
         )
         raise typer.Exit(2)
-    if max_turns is not None and max_turns < 1:
-        typer.echo("--max-turns must be >= 1", err=True)
-        raise typer.Exit(2)
     execution = None
     if execution_manifest is not None:
         from grok_worker.execution_contract import (
@@ -348,12 +354,13 @@ def cmd_run(
         src = source.resolve()
         disp = disposable_root.resolve() if disposable_root else default_disposable_root(src)
     arts = artifact_root.resolve() if artifact_root else default_artifact_root(disp)
+    shared = _shared(shared_cache_root)
     cfg = RunConfig(
         source=src,
         prompt=text,
         disposable_root=disp,
         artifact_root=arts,
-        shared_cache_root=_shared(shared_cache_root),
+        shared_cache_root=shared,
         cap_bytes=cap_bytes,
         keep_reason=keep,
         mode=mode,
@@ -369,6 +376,7 @@ def cmd_run(
         reasoning_effort=reasoning_effort or default_reasoning_effort(),
         allow_subagents=allow_subagents,
         failure_retain_hours=failure_retain_hours,
+        max_workers=max_workers,
         prepare_deps=not no_prepare_deps and not prompt_only,
         include_dirty=include_dirty,
         include_dirty_paths=list(include_dirty_path or []),
@@ -378,7 +386,6 @@ def cmd_run(
         cache_ttl_hours=cache_ttl_hours,
         disable_web_search=disable_web_search,
         disallowed_tools=list(disallowed_tool or []),
-        max_turns=max_turns,
         continue_task=continue_task,
         write_continuation=write_continuation,
         execution=execution,
@@ -658,6 +665,11 @@ def cmd_watch(
     dispatcher_id: str | None = typer.Option(
         None, "--dispatcher-id", help="Watch all runs for one dispatcher"
     ),
+    until_settled: bool = typer.Option(
+        False,
+        "--until-settled",
+        help="For one --run-id, keep the same event wait through cleanup settlement",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Wait for completion/attention; return compact health only on timeout."""
@@ -670,6 +682,7 @@ def cmd_watch(
             wait_seconds=float(wait_seconds),
             run_id=run_id,
             dispatcher_id=disp_id,
+            until_settled=until_settled,
         )
     except (EventWaitError, ValueError) as exc:
         typer.echo(str(exc), err=True)
@@ -699,15 +712,22 @@ def cmd_watch(
 def cmd_health(
     disposable_root: Path | None = typer.Option(None, "--disposable-root"),
     source: Path | None = typer.Option(None, "--source"),
+    shared_cache_root: Path | None = typer.Option(None, "--shared-cache-root"),
     dispatcher_id: str | None = typer.Option(None, "--dispatcher-id"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Diagnostic-only health inspection (read-only; never terminates workers)."""
+    disp_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None
     root = _resolve_disposable(disposable_root, source)
-    report = collect_health(
-        root,
-        dispatcher_id=dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None,
-    )
+    roots = [root]
+    if disposable_root is None and source is None:
+        roots.extend(known_disposable_roots(_shared(shared_cache_root)))
+    unique_roots = {os.path.normcase(str(item.resolve())): item.resolve() for item in roots}
+    report = HealthReport()
+    for item in sorted(unique_roots.values(), key=lambda path: str(path).casefold()):
+        item_report = collect_health(item, dispatcher_id=disp_id)
+        report.roots.extend(item_report.roots)
+        report.clones.extend(item_report.clones)
     payload = report.to_dict()
     if as_json:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))

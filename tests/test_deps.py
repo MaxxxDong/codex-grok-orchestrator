@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from grok_worker.deps import (
+    NPM_SYNC_CONTRACT,
     DepsError,
+    build_npm_sync_cmd,
     build_uv_sync_cmd,
     compute_fingerprint,
     detect_clone_local_env,
@@ -16,6 +20,7 @@ from grok_worker.deps import (
     worker_env_exports,
 )
 from grok_worker.runner import RunConfig, run_worker
+from tests.path_helpers import symlink_or_skip
 
 
 def _write_pyproject(source: Path, lock_extra: str = "") -> None:
@@ -89,7 +94,7 @@ def test_fingerprint_stable_across_ephemeral_executable_symlinks(tmp_path: Path)
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.exists() or link.is_symlink():
             link.unlink()
-        link.symlink_to(real_py)
+        symlink_or_skip(link, real_py)
 
     assert link_a != link_b
     assert os.path.realpath(link_a) == os.path.realpath(link_b) == str(real_py)
@@ -110,7 +115,7 @@ def test_fingerprint_stable_across_ephemeral_executable_symlinks(tmp_path: Path)
     other_real.chmod(0o755)
     other_link = tmp_path / "builds-v0" / ".tmpCCCC" / "bin" / "python"
     other_link.parent.mkdir(parents=True, exist_ok=True)
-    other_link.symlink_to(other_real)
+    symlink_or_skip(other_link, other_real)
     with mock.patch("grok_worker.deps.sys.executable", str(other_link)):
         fp_other = compute_fingerprint(source)
     assert fp_other != fp_a
@@ -126,6 +131,23 @@ def test_exact_frozen_argv(tmp_path: Path) -> None:
         assert flag in cmd
     assert "--directory" in cmd
     assert not any("editable" in c for c in cmd)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm launcher")
+def test_npm_cmd_bypasses_batch_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "nodejs"
+    npm = root / "npm.CMD"
+    entry = root / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    node = root / "node.exe"
+    entry.parent.mkdir(parents=True)
+    npm.write_text("@echo off\r\n", encoding="utf-8")
+    entry.write_text("", encoding="utf-8")
+    node.write_bytes(b"")
+    monkeypatch.setattr(
+        "grok_worker.deps.which", lambda name: str(node) if name == "node" else None
+    )
+
+    assert build_npm_sync_cmd(str(npm)) == [str(node), str(entry), *NPM_SYNC_CONTRACT]
 
 
 def test_prepare_uses_exact_frozen_once(tmp_path: Path) -> None:
@@ -145,6 +167,89 @@ def test_prepare_uses_exact_frozen_once(tmp_path: Path) -> None:
             env2 = prepare_shared_env(source, shared)
     assert len(calls) == 1
     assert env2["UV_PROJECT_ENVIRONMENT"] == env["UV_PROJECT_ENVIRONMENT"]
+
+
+def test_prepare_installs_locked_nested_npm_project(tmp_path: Path) -> None:
+    source, shared = tmp_path / "src", tmp_path / "shared"
+    project = source / "services" / "runtime-core"
+    project.mkdir(parents=True)
+    (project / "package.json").write_text('{"name":"runtime-core"}\n', encoding="utf-8")
+    (project / "package-lock.json").write_text(
+        '{"name":"runtime-core","lockfileVersion":3,"packages":{}}\n',
+        encoding="utf-8",
+    )
+    decoy = project / "node_modules" / "decoy"
+    decoy.mkdir(parents=True)
+    (decoy / "package.json").write_text('{"name":"decoy"}\n', encoding="utf-8")
+    (decoy / "package-lock.json").write_text(
+        '{"name":"decoy","lockfileVersion":3,"packages":{}}\n',
+        encoding="utf-8",
+    )
+    calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((list(cmd), Path(kwargs["cwd"]), dict(kwargs["env"])))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    with mock.patch("grok_worker.deps.subprocess.run", side_effect=fake_run):
+        with mock.patch("grok_worker.deps.which", return_value="/usr/bin/npm"):
+            env = prepare_shared_env(source, shared)
+            repeated = prepare_shared_env(source, shared)
+
+    assert len(calls) == 1
+    command, cwd, child_env = calls[0]
+    assert command == [
+        "/usr/bin/npm",
+        "ci",
+        "--prefer-offline",
+        "--no-audit",
+        "--no-fund",
+        "--ignore-scripts",
+    ]
+    assert cwd == project.resolve()
+    assert child_env["NPM_CONFIG_CACHE"] == str((shared / "npm").resolve())
+    assert env["GROK_WORKER_NPM_PROJECTS"] == "services/runtime-core"
+    assert repeated == env
+    contract = worker_env_exports(env)
+    assert "Locked npm dependencies are already installed" in contract
+    assert "Dependency preparation is disabled" not in contract
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows venv layout")
+def test_prepare_accepts_windows_scripts_interpreter(tmp_path: Path) -> None:
+    source, shared = tmp_path / "src", tmp_path / "shared"
+    source.mkdir()
+    _write_pyproject(source)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        env = kwargs.get("env") or {}
+        venv = Path(env["UV_PROJECT_ENVIRONMENT"])
+        scripts = venv / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "python.exe").write_bytes(b"windows-python")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    with mock.patch("grok_worker.deps.subprocess.run", side_effect=fake_run):
+        with mock.patch("grok_worker.deps.which", return_value="C:\\Tools\\uv.exe"):
+            first = prepare_shared_env(source, shared)
+            second = prepare_shared_env(source, shared)
+
+    assert len(calls) == 1
+    assert first["UV_PROJECT_ENVIRONMENT"] == second["UV_PROJECT_ENVIRONMENT"]
 
 
 def test_frozen_failure_no_retry(tmp_path: Path) -> None:
@@ -173,11 +278,17 @@ def test_deps_prewarm_failure_warns_and_still_invokes_backend(
     _write_pyproject(git_source)
     subprocess.run(["git", "add", "-A"], cwd=git_source, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "deps"], cwd=git_source, check=True, capture_output=True)
-    never = tmp_roots["root"] / "bin" / "never-acpx"
+    never = tmp_roots["root"] / "bin" / ("never-acpx.cmd" if os.name == "nt" else "never-acpx")
     never.parent.mkdir(parents=True, exist_ok=True)
     invoked_marker = tmp_roots["root"] / "acpx-was-invoked"
-    never.write_text(f"#!/bin/sh\ntouch {invoked_marker}\nexit 99\n", encoding="utf-8")
-    never.chmod(0o755)
+    if os.name == "nt":
+        never.write_text(
+            f'@echo off\r\ntype nul > "{invoked_marker}"\r\nexit /b 99\r\n',
+            encoding="utf-8",
+        )
+    else:
+        never.write_text(f"#!/bin/sh\ntouch {invoked_marker}\nexit 99\n", encoding="utf-8")
+        never.chmod(0o755)
 
     def boom(*a, **k):  # type: ignore[no-untyped-def]
         raise failure
@@ -201,9 +312,7 @@ def test_deps_prewarm_failure_warns_and_still_invokes_backend(
     assert outcome.state == "failed"
     assert "deps prepare failed" not in (outcome.message or "")
     assert outcome.artifact_path is not None
-    worker_log = Path(outcome.artifact_path, "worker.log").read_text(
-        encoding="utf-8"
-    )
+    worker_log = Path(outcome.artifact_path, "worker.log").read_text(encoding="utf-8")
     assert "dependency prewarm skipped" in worker_log
 
 
@@ -232,6 +341,15 @@ def test_worker_env_exports_require_no_sync() -> None:
             "PYTHONPATH": "/different-clone",
         }
     )
+
+
+def test_worker_env_exports_forbid_uv_when_project_environment_is_absent() -> None:
+    text = worker_env_exports({"UV_CACHE_DIR": "/c"})
+
+    assert "Dependency preparation is disabled" in text
+    assert "Do not run uv, uv run, uv sync, pip" in text
+    assert "Always use: uv run --no-sync" not in text
+    assert "UV_PROJECT_ENVIRONMENT" not in text
 
 
 def test_concurrent_preparation_serialized(tmp_path: Path) -> None:

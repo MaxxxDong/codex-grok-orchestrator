@@ -15,7 +15,7 @@ from grok_worker.completion_events import emit_completion_event
 from grok_worker.constants import DEFAULT_FAILURE_RETAIN_HOURS
 from grok_worker.continuation import continuation_path
 from grok_worker.grok_state import cleanup_clone_session_state, clone_session_root
-from grok_worker.locks import root_lock
+from grok_worker.locks import root_lock, worker_lock
 from grok_worker.models import (
     WorkerMeta,
     WorkerState,
@@ -64,21 +64,13 @@ def _expired_continuation(meta: WorkerMeta, clone: Path, now: datetime) -> bool:
 
 
 def _worker_lock_held(clone: Path) -> bool:
-    import fcntl
-    import os
-
-    lock_file = meta_dir(clone) / "worker.lock"
-    if not lock_file.exists():
+    lock = worker_lock(meta_dir(clone))
+    if not lock.path.exists():
         return False
-    fd = os.open(str(lock_file), os.O_RDWR)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
-    except BlockingIOError:
+    if not lock.try_acquire():
         return True
-    finally:
-        os.close(fd)
+    lock.release()
+    return False
 
 
 def convert_dead_worker(

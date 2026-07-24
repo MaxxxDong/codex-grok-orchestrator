@@ -22,6 +22,7 @@ CACHE_BUCKETS = (
     "poetry",
     "metrics",
     "launch-logs",
+    "run-events",
 )
 
 
@@ -98,6 +99,8 @@ def shared_cache_environment(root: Path) -> dict[str, str]:
         "NPM_CONFIG_CACHE": str(root / "npm"),
         "POETRY_CACHE_DIR": str(root / "poetry"),
         "GROK_SHARED_VENV_ROOT": str(root / "venvs"),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
         "PIPENV_VENV_IN_PROJECT": "0",
         "POETRY_VIRTUALENVS_IN_PROJECT": "false",
     }

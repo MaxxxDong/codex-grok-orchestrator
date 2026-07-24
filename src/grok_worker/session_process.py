@@ -3,21 +3,32 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from grok_worker.acpx_runtime import managed_runtime_identity
 from grok_worker.activity_lease import initialize_lease, run_with_activity_lease
 from grok_worker.cache_policy import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_CACHE_TTL_HOURS,
     cache_use_lease,
 )
-from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_CAP_BYTES, DEFAULT_HARD_TIMEOUT
-from grok_worker.deps import DepsError, prepare_shared_env
+from grok_worker.constants import (
+    DEFAULT_ACPX_TIMEOUT,
+    DEFAULT_CAP_BYTES,
+    DEFAULT_HARD_TIMEOUT,
+    MAX_CONCURRENT_WORKERS,
+)
+from grok_worker.deps import DepsError, prepare_shared_env, worker_env_exports
 from grok_worker.locks import worker_lock
 from grok_worker.metrics import append_metric, extract_token_metrics_from_text
 from grok_worker.paths import meta_dir
-from grok_worker.run_config import default_agent_bin
+from grok_worker.run_config import (
+    default_agent_bin,
+    normalize_agent_command,
+    resolve_acpx_command,
+)
 from grok_worker.session_commands import build_ensure_cmd, build_prompt_cmd
 from grok_worker.session_state import SessionState, permission_signature, session_state_path
 from grok_worker.settings import (
@@ -36,7 +47,7 @@ class SessionConfig:
     disposable_root: Path
     artifact_root: Path
     shared_cache_root: Path
-    acpx_bin: str = "acpx"
+    acpx_bin: str | None = None
     agent_bin: str | None = None
     mcp_config: str | None = None
     model: str = ""
@@ -45,6 +56,7 @@ class SessionConfig:
     timeout: int = DEFAULT_ACPX_TIMEOUT
     hard_timeout: int | None = DEFAULT_HARD_TIMEOUT
     prepare_deps: bool = True
+    max_workers: int = MAX_CONCURRENT_WORKERS
     cap_bytes: int = DEFAULT_CAP_BYTES
     cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES
     cache_ttl_hours: float = DEFAULT_CACHE_TTL_HOURS
@@ -52,6 +64,8 @@ class SessionConfig:
     run_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
         if not self.model:
             self.model = default_model()
         if not self.reasoning_effort:
@@ -68,6 +82,10 @@ class SessionOutcome:
 
 
 def permission_contract_signature(cfg: SessionConfig) -> str:
+    if cfg.acpx_bin is None and sys.platform == "win32":
+        acpx_runtime = f"managed:{managed_runtime_identity()}"
+    else:
+        acpx_runtime = "explicit:" + "\0".join(resolve_acpx_command(cfg.acpx_bin))
     return permission_signature(
         mode=cfg.mode,
         agent=cfg.agent_bin or default_agent_bin(),
@@ -75,16 +93,17 @@ def permission_contract_signature(cfg: SessionConfig) -> str:
         model=cfg.model,
         reasoning_effort=cfg.reasoning_effort,
         allow_subagents=cfg.allow_subagents,
+        acpx_runtime=acpx_runtime,
     )
 
 
 def common_command(cfg: SessionConfig, clone: Path) -> list[str]:
     command = [
-        cfg.acpx_bin,
+        *resolve_acpx_command(cfg.acpx_bin),
         "--cwd",
         str(clone),
         "--agent",
-        cfg.agent_bin or default_agent_bin(),
+        normalize_agent_command(cfg.agent_bin or default_agent_bin()),
         "--auth-policy",
         "skip",
     ]
@@ -132,7 +151,6 @@ def invoke(
 def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure: bool) -> int:
     clone = Path(state.clone_realpath)
     prompt_file = meta_dir(clone) / f"prompt-{state.prompt_count + 1:03d}.md"
-    prompt_file.write_text(prompt, encoding="utf-8")
     log = cfg.artifact_root / f".run-log-{state.task_id}" / "agent.log"
     env = os.environ.copy()
     env.update(
@@ -154,6 +172,10 @@ def prompt_turn(cfg: SessionConfig, state: SessionState, prompt: str, *, ensure:
                 log.parent.mkdir(parents=True, exist_ok=True)
                 with log.open("a", encoding="utf-8") as stream:
                     stream.write(f"[grok-worker] warning: dependency prewarm skipped: {exc}\n")
+        effective_prompt = prompt
+        if ensure:
+            effective_prompt += "\n" + worker_env_exports(dep_env)
+        prompt_file.write_text(effective_prompt, encoding="utf-8")
         env.update(dep_env)
         common = common_command(cfg, clone)
         initialize_lease(

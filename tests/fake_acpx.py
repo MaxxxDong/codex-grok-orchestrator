@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import stat
+import sys
 import textwrap
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from pathlib import Path
 def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
     """Install a fake `acpx` that simulates worker outcomes without network."""
     bin_dir.mkdir(parents=True, exist_ok=True)
-    path = bin_dir / "acpx"
+    script_path = bin_dir / ("fake_acpx.py" if os.name == "nt" else "acpx")
     script = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
@@ -61,6 +63,34 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
                 }}],
             )
             print("fake acpx success")
+            sys.exit(0)
+        if behavior == "barrier_success":
+            barrier = Path(os.environ["FAKE_ACPX_BARRIER_DIR"])
+            barrier.mkdir(parents=True, exist_ok=True)
+            task_id = os.environ["GROK_WORKER_TASK_ID"]
+            (barrier / task_id).write_text("ready\\n", encoding="utf-8")
+            expected = int(os.environ["FAKE_ACPX_BARRIER_EXPECTED"])
+            deadline = time.monotonic() + 15
+            while len(list(barrier.iterdir())) < expected and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if len(list(barrier.iterdir())) < expected:
+                print("parallel barrier timed out", file=sys.stderr)
+                sys.exit(93)
+            (cwd / "feature.txt").write_text("added\\n", encoding="utf-8")
+            (out / "verification" / "tests.txt").write_text("ok\\n", encoding="utf-8")
+            write_result(
+                schema_version=1,
+                task_completed=True,
+                status="completed",
+                summary="parallel worker completed",
+                findings=[],
+                verification=[{{
+                    "command": "pytest",
+                    "exit_code": 0,
+                    "log_path": ".grok-output/verification/tests.txt",
+                }}],
+            )
+            print("parallel fake acpx success")
             sys.exit(0)
         if behavior == "success_analysis":
             write_result(
@@ -168,6 +198,9 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
         if behavior == "acpx_zero_no_result":
             print("acpx ok but no result")
             sys.exit(0)
+        if behavior == "cancelled_analysis_envelope":
+            print(json.dumps({{"text": "I'll research this now.", "stopReason": "Cancelled"}}))
+            sys.exit(0)
         if behavior == "nonzero_completed":
             (out / "verification" / "tests.txt").write_text("ok\\n", encoding="utf-8")
             write_result(
@@ -229,6 +262,13 @@ def write_fake_acpx(bin_dir: Path, behavior: str = "success") -> Path:
         sys.exit(2)
         """
     )
-    path.write_text(script, encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    return path
+    script_path.write_text(script, encoding="utf-8")
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if os.name != "nt":
+        return script_path
+    launcher = bin_dir / "acpx.cmd"
+    launcher.write_text(
+        f'@"{sys.executable}" "{script_path}" %*\n',
+        encoding="utf-8",
+    )
+    return launcher

@@ -4,6 +4,52 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-24
+
+### Changed
+
+- Removed the public `max_turns` / `--max-turns` capability end to end. Native
+  workers now rely on the renewable inactivity lease and absolute hard timeout,
+  and detached receipts/lifecycle metadata record the effective non-sensitive
+  execution policy.
+- Native `max_tokens_truncation` and `max_turns_reached` failures now trigger
+  automatic same-session continuation inside the same lifecycle. If recovery
+  cannot finish, the primary budget error remains visible and the retained clone
+  carries compatible continuation metadata.
+- Added `watch --until-settled` so one per-run wait consumes `terminal` and waits
+  through clone/session cleanup without a second caller-managed watch command.
+- Explicit execution-contract `finalGates` are now executed by the runner, which
+  atomically records authoritative verification logs and replaces same-command
+  model claims with the observed exit code.
+- Run-specific notification receipts avoid repeatedly reparsing the global event
+  history. A missing durable terminal receipt now retains the successful clone,
+  and watch performs a low-frequency lifecycle fallback instead of reporting a
+  cleaned successful run as missing.
+- Runner-owned final gates are omitted from the model prompt, execute once with a
+  shared remaining hard-time budget, and stop after the first failed gate. Metrics
+  are written afterwards with backend, verification, total, and final-exit fields.
+- Automatic budget continuation now stops after a repeated identical failure with
+  no observable workspace/result/verification progress, preserving manual
+  continuation rather than generating an unbounded series of paid calls.
+- Runs register their disposable root in a bounded shared observability index.
+  Default `health` now reports workers across known roots, while an explicit
+  `--disposable-root` remains a single-root query.
+
+### Fixed
+
+- Preserve backend/provider failures as the primary lifecycle error when missing
+  structured output or artifact finalization is a secondary consequence.
+- Prepare locked nested npm projects inside disposable clones using the shared npm
+  download cache, including native Windows npm launcher resolution.
+- Reject bare runner-owned final-gate task names before clone creation or provider
+  invocation; gates must identify an executable command from the clone root.
+- Reject final gates whose PowerShell variable was expanded away while authoring
+  the manifest, before clone creation or provider invocation.
+- Keep dirty-snapshot Git argv bounded on Windows, then reject any tracked source
+  race that materialized outside the disclosure inventory.
+- Keep ACP command-construction tests independent of the machine's managed acpx
+  receipt and PowerShell installation.
+
 ## [0.7.2] - 2026-07-20
 
 ### Fixed
@@ -61,7 +107,7 @@ All notable public changes are recorded here. The project follows semantic versi
 - Continuation metadata is now written only after semantic success, and its
   compatibility hash includes the bounded execution contract.
 - **Task-scoped tool policy** (native flags only): `--disable-web-search`,
-  `--disallowed-tool` (repeatable), `--max-turns`. Effective tool signature is
+  `--disallowed-tool` (repeatable). Effective tool signature is
   part of continuation compatibility. User plugins/MCP remain available by
   default.
 - **Native JSON Schema final-result capture**: implementation native runs pass
@@ -79,7 +125,7 @@ All notable public changes are recorded here. The project follows semantic versi
   applied (Grok sessions key by physical path). Do not claim provider cache
   hits without A/B evidence.
 - CLI: `--execution-manifest`, `--continue`, `--write-continuation`,
-  `--disable-web-search`, `--disallowed-tool`, `--max-turns`, `--stall-turns`,
+  `--disable-web-search`, `--disallowed-tool`, `--stall-turns`,
   `--stall-seconds`, `--no-native-json-schema`.
 
 ### Changed
@@ -198,6 +244,8 @@ All notable public changes are recorded here. The project follows semantic versi
 
 - One-shot library/API callers now default to native Grok Build headless, matching
   the CLI. ACP is explicit compatibility transport and remains the v0.5 named-session backend.
+- The Windows-native integration keeps managed ACP as its CLI default while
+  retaining Native as an explicit backend.
 - Stable Skill/role instructions stay at the start of one-shot prompts. Dynamic
   clone, dependency, and cache paths remain process environment only.
 - Native and ACP processes use the user's normal Grok home. Configured plugins,

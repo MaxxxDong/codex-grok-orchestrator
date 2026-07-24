@@ -1,9 +1,21 @@
-# Windows / WSL upgrade: 0.3-0.5.3 to 0.7.2
+# Windows native upgrade: 0.3-0.7.2 to 0.8.0
 
-Native Windows remains unsupported because `grok-worker` uses POSIX `flock`,
-signals, and process-group semantics. Run it inside WSL2 Ubuntu. Native Grok
-headless means “direct Grok Build CLI without ACP”; it does not remove the WSL
-requirement.
+This integration branch supports native Windows 10/11. It does not use WSL as
+the default or as a fallback. The canonical source checkout, installed Windows
+executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
+the only active runtime chain.
+
+## What changes in 0.8.0
+
+- The public model-turn cap is removed. Recoverable native budget stops continue
+  in the same session and repeated no-progress failures stop deterministically.
+- `watch --until-settled` waits for terminal and cleanup events in one command.
+- Runner-owned final gates, durable per-run receipts, multi-root health, bounded
+  Windows snapshot commands, nested npm preparation, strict gate preflight, and
+  cancelled-result rejection harden the existing native lifecycle.
+- The Windows runtime is verified with Grok Build 0.2.111 while keeping the same
+  provider profile, High reasoning, plugins, MCP, hidden child processes, and
+  Win32 process-tree cleanup.
 
 ## What changes in 0.7.2
 
@@ -24,7 +36,7 @@ requirement.
   automatic 24-hour bounded keep; not routed through ACP.
 - Runner-owned native JSON Schema final-result capture; ACP still writes
   `result.json` on disk.
-- Opt-in `--disable-web-search`, `--disallowed-tool`, `--max-turns`.
+- Opt-in `--disable-web-search` and `--disallowed-tool`; no model-turn cap is exposed.
 - Productive-progress attention (`--stall-turns` / `--stall-seconds`).
 - Stable prompt fingerprints and honest cache A/B metric fields.
 
@@ -61,6 +73,9 @@ requirement.
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
 - `--backend acp` and named sessions remain available and still require `acpx`.
+- Windows terminal and file tools are verified with Grok Build 0.2.111. The
+  managed acpx runtime remains the only ACP compatibility path; there is no
+  global-acpx or WSL fallback.
 - Workers use the native Grok home, so configured plugins, MCP servers, OAuth,
   stable-channel metadata, explicit High reasoning, and prompt-cache behavior
   remain available.
@@ -78,149 +93,85 @@ requirement.
   startup.
 - Completion events, activity-renewed leases, verified three-file artifacts,
   capacity limits, and guarded cleanup remain in force.
+- Native token/cache/reasoning metrics, hidden child processes, Win32
+  process-tree cleanup, PowerShell 7/UTF-8 routing, and adaptive cmd decoding
+  remain part of the Windows integration.
+- Sensitive files, escaping symlinks/reparse points, artifact verification, and
+  cleanup ownership remain hard gates.
 
-## Recommended WSL2 layout
+## Single-source layout
 
-Keep the runtime and active repositories in the WSL filesystem, for example
-`/home/<user>/CodexWS`, rather than `/mnt/c`. This avoids slow metadata calls and
-Windows/WSL permission translation. Keep Windows-native Codex configuration and
-WSL `~/.codex` / `~/.grok` separate.
+- Canonical source checkout: one maintained Windows repository.
+- Codex skill: a directory junction to that canonical checkout, not a copy.
+- Installed commands: `%USERPROFILE%\.local\bin\grok-worker.exe` and
+  `%USERPROFILE%\.local\bin\grok-worker-agent.exe`.
+- ACP compatibility: the immutable grok-worker-owned runtime reported by
+  `grok-worker acpx-runtime-status`; never a silent global-acpx fallback.
+- Grok provider configuration: `%USERPROFILE%\.grok\config.toml`; upgrades do
+  not rewrite provider URL, key, model, effort, or backend fields.
 
-Do not overwrite `~/.grok/config.toml`, `~/.grok/Agents.md`, provider credentials,
-or OAuth state during the upgrade.
+## Upgrade sequence
 
-## Side-by-side upgrade
+1. Record the current branch/commit, executable hashes, skill-junction target,
+   managed acpx status, and a hash of the Grok config.
+2. Back up the full canonical repository (including `.git` and dirty files) and
+   the installed uv tool plus both executables.
+3. Fetch and verify `codex/windows-native-v0.8.0` from the canonical repository.
+4. Review or install that branch from the existing canonical checkout. Do not
+   replace it with a second `git clone --branch codex/windows-native-v0.8.0`
+   installation.
+5. Preserve Win32 file locking, reparse-safe cleanup, PowerShell 7/UTF-8,
+   adaptive cmd decoding, hidden child processes, Windows process-tree cleanup,
+   managed acpx, configurable worker capacity, and the shared status root.
+6. Run full pytest, Ruff, mypy, local runtime/Unicode/no-window/file-tool smoke,
+   and one real Grok 4.5/high end-to-end canary.
+7. Install from the verified canonical source and recheck executable hashes,
+   version, junction target, managed runtime, config hash, artifacts, metrics,
+   `.mcp.json` visibility/integrity, Native session cleanup, and clone cleanup.
 
-Run inside WSL Ubuntu:
+## Native preflight
 
-```bash
-set -euo pipefail
-
-stamp="$(date +%Y%m%d-%H%M%S)"
-skill_root="$HOME/.codex/skills"
-old="$skill_root/grok-worker"
-backup="$skill_root/grok-worker-pre-0.5-$stamp"
-
-mkdir -p "$skill_root"
-if [ -d "$old" ]; then
-  mv "$old" "$backup"
-fi
-
-git clone --branch v0.7.2 --depth 1 \
-  https://github.com/MaxxxDong/codex-grok-orchestrator.git \
-  "$old"
-
-cd "$old"
-uv sync --extra dev
-uv run ruff check src tests
-uv run mypy src
-uv run pytest -q
-```
-
-Expose the verified launcher:
-
-```bash
-mkdir -p "$HOME/.local/bin"
-ln -sfn "$HOME/.codex/skills/grok-worker/bin/grok-worker" \
-  "$HOME/.local/bin/grok-worker"
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Only expose the ACP adapter when named sessions or `--backend acp` are needed:
-
-```bash
-ln -sfn "$HOME/.codex/skills/grok-worker/bin/grok-acp-worker" \
-  "$HOME/.local/bin/grok-acp-worker"
-```
-
-## Preflight
-
-```bash
+```powershell
+$repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
+(Get-Command grok-worker).Source
 grok --version
 grok-worker --version
+grok-worker acpx-runtime-status
+grok-worker preflight --source $repo --json
+grok-worker status --source $repo --json
 grok models
-grok-worker --help
-grok-worker run --help
-grok-worker cache-status
 ```
 
-For the ACP compatibility path also run:
+`grok-worker.exe` must resolve under `%USERPROFILE%\.local\bin`. Default Native
+one-shot work does not require acpx. Named sessions and explicit ACP runs require
+the healthy managed runtime. Do not switch to WSL or global acpx when that
+runtime is unhealthy.
 
-```bash
-acpx --version
+## Windows canary
+
+Use a small Git repository and a prompt file. A normal dirty text file should be
+snapshotted safely; secret-shaped files and escaping links must still be
+rejected.
+
+```powershell
+$env:GROK_WORKER_DISPATCHER_ID = "windows-v053-canary"
+grok-worker run `
+  --source $repo `
+  --mode implementation `
+  --task-id windows-v053-native-canary `
+  --reasoning-effort high `
+  --max-workers 24 `
+  --prompt-file $promptFile
 ```
 
-## Native smoke
-
-Use a small Git repository under the WSL filesystem. It may contain an ordinary
-uncommitted text file; v0.5 should snapshot it instead of refusing startup.
-
-```bash
-export GROK_WORKER_DISPATCHER_ID="windows-v05-smoke-$(date +%s)"
-
-grok-worker run \
-  --backend native \
-  --source /home/<user>/CodexWS/smoke-repository \
-  --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" \
-  --mode analysis \
-  --task-id windows-v05-native-smoke \
-  --no-subagents \
-  --prompt "Read-only smoke. Report branch, short HEAD, and working-tree state."
-```
-
-Verify current evidence, not only terminal text:
-
-```bash
-grok-worker status --source /home/<user>/CodexWS/smoke-repository --json
-grok-worker health --source /home/<user>/CodexWS/smoke-repository --json
-```
-
-Accept the smoke only when the lifecycle reports `exit_code=0` and the artifact
-directory contains exactly `changes.patch`, `worker.log`, and `verification.txt`.
-Inspect metrics when present. A cache miss is not a failure; an ignored reasoning
-effort warning is a failure in v0.5.
-
-## ACP compatibility smoke
-
-Run this only when ACP is needed:
-
-```bash
-grok-worker run \
-  --backend acp \
-  --source /home/<user>/CodexWS/smoke-repository \
-  --mode analysis \
-  --task-id windows-v05-acp-smoke \
-  --prompt "Read-only ACP compatibility smoke."
-```
-
-Named `session-start` / `session-followup` / `session-finalize` commands remain
-ACP-backed in 0.5.x.
-
-## Migration cautions
-
-- Do not copy old disposable clones into the new runtime. They are evidence, not
-  installation files.
-- Do not delete unknown legacy clones. Inspect them with
-  `grok-worker list-legacy --disposable-root PATH`.
-- Old dirty allowlist flags may remain in scripts, but they no longer filter the
-  snapshot; all safe nonignored dirt is included. Remove the flags after
-  confirming v0.5 behavior.
-- Reuse one opaque dispatcher ID only within one Root task.
-- A completion-event wait timeout means only “no matching event yet.”
-- Use `grok-worker lease-set` to adjust active idle/hard limits rather than
-  restarting a healthy worker.
-- Keep a hard cap unless a specific controlled task needs `--hard-timeout 0`.
+Accept a successful implementation only when the backend exits 0 and the
+external artifact directory contains exactly `changes.patch`, `worker.log`, and
+`verification.txt`. Confirm the structured result, tool receipts,
+reasoning/cache metrics, unchanged `.mcp.json`, and eligible clone cleanup.
 
 ## Rollback
 
-Stop new dispatches, preserve failed artifacts, then restore the backup:
-
-```bash
-failed="$HOME/.codex/skills/grok-worker-failed-$(date +%Y%m%d-%H%M%S)"
-mv "$HOME/.codex/skills/grok-worker" "$failed"
-mv "$HOME/.codex/skills/grok-worker-pre-0.5-REPLACE_TIMESTAMP" \
-  "$HOME/.codex/skills/grok-worker"
-```
-
-Rollback restores the Skill/runtime only. It must not replace `~/.grok` provider
-configuration or delete retained worker evidence.
+Restore the backed-up uv tool and executables together, then restore the
+canonical repository backup or reset only the dedicated integration worktree.
+Do not replace the skill junction with a copied skill and do not restore or
+create a second WSL provider configuration.

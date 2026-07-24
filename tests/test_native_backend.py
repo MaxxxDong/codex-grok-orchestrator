@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from grok_worker.execution_contract import ExecutionContract
 from grok_worker.gc import gc_disposable_root
 from grok_worker.grok_state import clone_session_root
 from grok_worker.models import WorkerMeta, dt_to_iso, utc_now
@@ -41,7 +43,55 @@ api_key = "{test_key}"
     return home
 
 
-def _fake_grok(bin_dir: Path, *, downgrade_reasoning: bool = False) -> Path:
+def _fake_grok(
+    bin_dir: Path, *, downgrade_reasoning: bool = False, inspect_exit: int = 0
+) -> Path:
+    if os.name == "nt":
+        grok = bin_dir / "grok.cmd"
+        grok.parent.mkdir(parents=True, exist_ok=True)
+        warning = (
+            "echo model does not support reasoning effort; ignoring 1>&2\r\n"
+            if downgrade_reasoning
+            else ""
+        )
+        grok.write_text(
+            "@echo off\r\n"
+            "setlocal EnableDelayedExpansion\r\n"
+            "if \"%~1\"==\"inspect\" (\r\n"
+            f"  exit /b {inspect_exit}\r\n"
+            ")\r\n"
+            "set \"cwd=\"\r\n"
+            "set \"args=\"\r\n"
+            ":args\r\n"
+            "if \"%~1\"==\"\" goto run\r\n"
+            "set \"args=!args! %~1\"\r\n"
+            "if \"%~1\"==\"--cwd\" set \"cwd=%~2\"\r\n"
+            "shift\r\n"
+            "goto args\r\n"
+            ":run\r\n"
+            "if not defined cwd exit /b 90\r\n"
+            "set \"mcp_state=absent\"\r\n"
+            "if exist \"!cwd!\\.mcp.json\" set \"mcp_state=present\"\r\n"
+            "mkdir \"!cwd!\\.grok-output\\verification\" 2>nul\r\n"
+            "> \"!cwd!\\.grok-output\\verification\\verify.log\" echo verification passed\r\n"
+            "> \"!cwd!\\.grok-output\\native-env.txt\" (\r\n"
+            "  echo %HOME%\r\n"
+            "  if defined GROK_HOME (echo %GROK_HOME%) else (echo unset)\r\n"
+            "  echo !args!\r\n"
+            "  echo %UV_CACHE_DIR%\r\n"
+            "  echo %GROK_SHARED_VENV_ROOT%\r\n"
+            "  echo !mcp_state!\r\n"
+            ")\r\n"
+            "echo {\"schema_version\":1,\"task_completed\":true,"
+            "\"status\":\"completed\",\"summary\":\"native ok\","
+            "\"findings\":[],\"verification\":[{\"command\":\"fake verify\","
+            "\"exit_code\":0,\"log_path\":\".grok-output/verification/verify.log\"}],"
+            "\"usage\":{\"input_tokens\":4096,\"cache_read_input_tokens\":2048,"
+            "\"output_tokens\":128,\"reasoning_tokens\":77,\"num_turns\":3}}\r\n"
+            + warning,
+            encoding="utf-8",
+        )
+        return grok
     grok = bin_dir / "grok"
     grok.parent.mkdir(parents=True, exist_ok=True)
     warning = (
@@ -56,7 +106,7 @@ if [ "${1:-}" = "inspect" ]; then
   printf '%s\n' \
     "{\"configSources\":{\"layers\":[{\"role\":\"user\",\"path\":\"$HOME/.grok/config.toml\"}]},"\
 "\"plugins\":[],\"mcpServers\":[]}"
-  exit 0
+  exit __INSPECT_EXIT__
 fi
 cwd=""
 args=""
@@ -80,7 +130,7 @@ printf '%s\n' \
 '"exit_code":0,"log_path":".grok-output/verification/verify.log"}],'\
 '"usage":{"input_tokens":4096,"cache_read_input_tokens":2048,'\
 '"output_tokens":128,"reasoning_tokens":77,"num_turns":3}}'
-"""
+""".replace("__INSPECT_EXIT__", str(inspect_exit), 1)
         + warning,
         encoding="utf-8",
     )
@@ -109,6 +159,7 @@ def test_native_backend_uses_source_home_high_and_project_mcp(
         capture_output=True,
     )
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
 
     outcome = run_worker(
@@ -145,7 +196,8 @@ def test_native_backend_uses_source_home_high_and_project_mcp(
     assert mcp_state == "present"
     prompt = (clone / ".grok-worker/prompt-one-shot.md").read_text(encoding="utf-8")
     assert prompt.startswith("# Grok Worker Stable Base v1")
-    assert "Dependency paths are already configured" in prompt
+    assert "Dependency preparation is disabled" in prompt
+    assert "Do not run uv, uv run, uv sync, pip" in prompt
     assert str(clone) not in prompt
     assert str(tmp_roots["shared"]) not in prompt
 
@@ -160,6 +212,110 @@ def test_native_backend_uses_source_home_high_and_project_mcp(
     assert metrics[-1]["reasoning_tokens"] == 77
 
 
+def test_native_execution_contract_captures_runner_owned_final_gate(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    executable = f'"{sys.executable}"' if os.name == "nt" else sys.executable
+    gate = f'{executable} -c "print(\'authoritative gate\')"'
+
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="implement and verify",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-runner-gate",
+            skip_post_gc=True,
+            execution=ExecutionContract.from_mapping({"finalGates": [gate]}),
+        )
+    )
+
+    assert outcome.state == "success"
+    receipt = json.loads(
+        (Path(outcome.artifact_path or "") / "verification.txt").read_text(encoding="utf-8")
+    )
+    runner_records = [
+        record
+        for record in receipt["result"]["verification"]
+        if record["log_path"].startswith(".grok-output/verification/runner-gate-")
+    ]
+    assert len(runner_records) == 1
+    assert runner_records[0]["command"] == gate
+    assert runner_records[0]["exit_code"] == 0
+
+
+def test_native_failed_runner_gate_updates_final_metrics(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    executable = f'"{sys.executable}"' if os.name == "nt" else sys.executable
+    gate = f'{executable} -c "raise SystemExit(7)"'
+
+    outcome = run_worker(
+        RunConfig(
+            source=git_source,
+            prompt="implement then let the runner verify",
+            disposable_root=tmp_roots["disposable"],
+            artifact_root=tmp_roots["artifacts"],
+            shared_cache_root=tmp_roots["shared"],
+            backend="native",
+            prepare_deps=False,
+            task_id="native-runner-gate-fails",
+            skip_post_gc=True,
+            execution=ExecutionContract.from_mapping({"finalGates": [gate]}),
+        )
+    )
+
+    assert outcome.state == "failed"
+    metrics = [
+        json.loads(line)
+        for line in (tmp_roots["shared"] / "metrics/worker-runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    record = metrics[-1]
+    assert record["backend_process_exit_code"] == 0
+    assert record["process_exit_code"] == 1
+    assert record["verification_duration_seconds"] >= 0
+    assert record["total_duration_seconds"] >= record["process_duration_seconds"]
+
+
+def test_budget_recovery_stops_repeated_failure_without_progress() -> None:
+    from grok_worker.worker_exec import _budget_continuation_allowed
+
+    assert _budget_continuation_allowed(
+        prior_continuations=0,
+        before_fingerprint="same",
+        after_fingerprint="same",
+    )
+    assert not _budget_continuation_allowed(
+        prior_continuations=1,
+        before_fingerprint="same",
+        after_fingerprint="same",
+    )
+    assert _budget_continuation_allowed(
+        prior_continuations=1,
+        before_fingerprint="before",
+        after_fingerprint="after",
+    )
+
+
 def test_native_backend_rejects_reasoning_downgrade(
     git_source: Path,
     tmp_roots: dict[str, Path],
@@ -168,6 +324,7 @@ def test_native_backend_rejects_reasoning_downgrade(
     fake = _fake_grok(tmp_roots["root"] / "bin", downgrade_reasoning=True)
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
 
     outcome = run_worker(
@@ -194,11 +351,10 @@ def test_environment_check_failure_warns_but_does_not_block_launch(
     tmp_roots: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _fake_grok(tmp_roots["root"] / "bin")
-    script = fake.read_text(encoding="utf-8").replace("  exit 0\nfi\ncwd=", "  exit 9\nfi\ncwd=", 1)
-    fake.write_text(script, encoding="utf-8")
+    fake = _fake_grok(tmp_roots["root"] / "bin", inspect_exit=9)
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
 
     outcome = run_worker(
@@ -254,6 +410,7 @@ def test_native_continuation_reuses_clone_then_closes_cleanly(
     fake = _fake_grok(tmp_roots["root"] / "bin")
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
     common = dict(
         source=git_source,
@@ -303,13 +460,16 @@ def test_native_continuation_reuses_clone_then_closes_cleanly(
 
 
 def test_expired_native_continuation_is_garbage_collected(
-    git_source: Path,
-    tmp_roots: dict[str, Path],
+    short_git_source: Path,
+    short_tmp_roots: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    git_source = short_git_source
+    tmp_roots = short_tmp_roots
     fake = _fake_grok(tmp_roots["root"] / "bin")
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
     outcome = run_worker(
         RunConfig(
@@ -356,6 +516,7 @@ def test_prompt_only_native_continuation_uses_research_contract(
     fake = _fake_grok(tmp_roots["root"] / "bin")
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
     common = dict(
         source=None,
@@ -405,6 +566,7 @@ def test_semantic_failure_does_not_create_kept_continuation(
     )
     source_home = _source_home(tmp_roots["root"])
     monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
     monkeypatch.setenv("HOME", str(source_home.parent))
     outcome = run_worker(
         RunConfig(
@@ -427,3 +589,79 @@ def test_semantic_failure_does_not_create_kept_continuation(
     assert not (clone / ".grok-worker/continuation.json").exists()
     lifecycle = WorkerMeta.read(meta_path(clone))
     assert lifecycle.retention_deadline is not None
+
+
+def test_budget_failure_automatically_resumes_same_native_session(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_grok(tmp_roots["root"] / "bin")
+    if os.name == "nt":
+        original = fake.read_text(encoding="utf-8")
+        marker = "!cwd!\\.budget-first"
+        replacement = (
+            f'if not exist "{marker}" (\n'
+            f'  > "{marker}" echo first\n'
+            '  echo {"type":"error","message":"response truncated by max_tokens",'
+            '"error_kind":"max_tokens_truncation"}\n'
+            '  exit /b 1\n'
+            ')\n'
+            'mkdir "!cwd!\\.grok-output\\verification" 2>nul\n'
+        )
+        fake.write_text(
+            original.replace(
+                'mkdir "!cwd!\\.grok-output\\verification" 2>nul\n',
+                replacement,
+                1,
+            ),
+            encoding="utf-8",
+        )
+    else:
+        original = fake.read_text(encoding="utf-8")
+        replacement = (
+            'if [ ! -e "$cwd/.budget-first" ]; then\n'
+            '  : > "$cwd/.budget-first"\n'
+            "  printf '%s\\n' '{\"type\":\"error\",\"message\":"
+            "\"response truncated by max_tokens\",\"error_kind\":"
+            "\"max_tokens_truncation\"}'\n"
+            '  exit 1\n'
+            'fi\n'
+            'mkdir -p "$cwd/.grok-output/verification"\n'
+        )
+        fake.write_text(
+            original.replace(
+                'mkdir -p "$cwd/.grok-output/verification"\n',
+                replacement,
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    source_home = _source_home(tmp_roots["root"])
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GROK_WORKER_GROK_BIN", str(fake))
+    monkeypatch.setenv("HOME", str(source_home.parent))
+    common = dict(
+        source=git_source,
+        disposable_root=tmp_roots["disposable"],
+        artifact_root=tmp_roots["artifacts"],
+        shared_cache_root=tmp_roots["shared"],
+        backend="native",
+        prepare_deps=False,
+        task_id="native-budget-resume",
+        skip_post_gc=True,
+    )
+
+    outcome = run_worker(RunConfig(**common, prompt="complete the task"))
+
+    assert outcome.state == "success"
+    assert outcome.clone_path is None
+    receipt = json.loads(
+        (Path(outcome.artifact_path or "") / "verification.txt").read_text(encoding="utf-8")
+    )
+    assert receipt["automatic_continuations"] == ["max_tokens_truncation"]
+    assert receipt["metrics"][-1]["automatic_continuations"] == [
+        "max_tokens_truncation"
+    ]
+    assert receipt["metrics"][-1]["continue_session"] is True

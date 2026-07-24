@@ -180,6 +180,7 @@ def collect_artifacts(
         "verification": _verification_records(clone),
         "cleanup_receipt": values["cleanup_receipt"],
         "metrics": values.get("metrics", []),
+        "automatic_continuations": values.get("automatic_continuations", []),
     }
     write_artifact_contract(
         staging, worker_payload=worker_payload, verification_payload=receipt_payload

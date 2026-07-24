@@ -8,8 +8,9 @@ description: Use when Codex should delegate bounded repository analysis, impleme
 Codex is always the dispatcher, reviewer, and decision owner. This skill is a foreground worker mechanism, not a daemon, scheduler, autonomous product, or replacement for user approval gates.
 
 Use only the lifecycle entry point `bin/grok-worker`. One-shot `run` defaults to
-native Grok Build headless. Do not invoke raw `grok`, `acpx`, or
-`grok-acp-worker` for repository work outside lifecycle diagnosis.
+native Grok Build headless on every platform. Managed ACP remains available only
+for explicit compatibility runs and named sessions. Do not invoke raw `grok`,
+`acpx`, or `grok-acp-worker` for repository work outside lifecycle diagnosis.
 
 For Codex-dispatched one-shot work, `run --detach` is the default launch path.
 It returns a receipt immediately; observe the `run_id` with `watch`, not an open
@@ -38,10 +39,30 @@ remains available only for direct interactive use and launcher diagnosis.
 - Each Grok worker may run at most 3 subagents concurrently for independent work.
   Prefer read-only research, review, and test analysis. Never assign overlapping
   writes; the lead worker owns integration and the structured result contract.
-- Root Codex may run independent direct workers concurrently. One Root task uses one stable opaque `dispatcher_id` and may have at most 10 active Grok Worker invocations; Root itself is not counted. Other Root tasks use different dispatcher IDs and neither count nor block this task. Do not claim or enforce a machine-global limit.
+- Root Codex may run independent direct workers concurrently. One Root task uses one stable opaque `dispatcher_id`; its active limit defaults to 10 and may be raised consistently with `--max-workers`/`GROK_WORKER_MAX_WORKERS` (for example 24). Root itself is not counted. Other Root tasks use different dispatcher IDs and neither count nor block this task. Do not claim or enforce a machine-global limit.
 - Each direct worker owns one clone, task manifest, cwd, process/session, log, and artifact directory. Never assign overlapping writes concurrently.
 - Root Codex reviews every result and decides whether to integrate it.
 - A clone path is disposable runtime evidence, never a canonical project path. Project artifacts that need an absolute repository path must use `.grok-worker/lifecycle.json` → `source_realpath`; never persist `pwd` or `.grok-disposable/grok-worker-*` in README, HANDOFF, submission material, or generated source.
+
+On native Windows, always use the installed `grok-worker.exe`. It runs this same
+Python lifecycle implementation with Win32 file locks, hidden child processes,
+Windows process-tree cleanup, PowerShell 7/UTF-8 policy, and the single active
+`%USERPROFILE%\.grok\config.toml`. Do not route through WSL and do not maintain a
+second provider configuration.
+
+Before the first Windows run in a task, resolve the repository and CLI paths.
+For ACP compatibility or named sessions, also verify the managed acpx runtime:
+
+```powershell
+$repo = (Resolve-Path -LiteralPath "C:\CodexWS\YourProject").Path
+(Get-Command grok-worker).Source
+grok-worker acpx-runtime-status
+```
+
+The command must resolve to `%USERPROFILE%\.local\bin\grok-worker.exe`. Pass the
+resolved Windows path to `--source`; never translate it to `/mnt/c/...`. If the
+managed runtime check fails, stop and report it instead of falling back to a
+global acpx or WSL.
 
 Preflight: verify `grok --version`, `grok models`, repository path, available
 disk, and `grok-worker status`. Verify `acpx --version` only for `--backend acp`
@@ -57,14 +78,18 @@ reports every blocked relative path and rule code in one pass without values.
 Do not weaken the scanner or retry one path at a time. An ordinary `run` refusal
 also prints the complete blocked-path list.
 
-If all 10 slots for the current dispatcher are busy, do not preempt or replace workers. Use `watch` for the dispatcher and retry the exact bounded task after a terminal event. A wait timeout means only “no matching event yet,” not Worker failure.
+If all configured slots for the current dispatcher are busy, do not preempt or
+replace workers. Use `watch` for the dispatcher and retry the exact bounded task
+after a terminal event. A wait timeout means only “no matching event yet,” not
+Worker failure.
 
 ## Choose one-shot or named session
 
 Use `run` for one bounded turn.
 
-`run` uses `--backend native` by default. Use `--backend acp` only for
-compatibility diagnosis or a known ACP-dependent integration.
+`run` defaults to `--backend native` on every platform. Windows terminal and
+file tools are verified with Grok Build 0.2.106. Managed `--backend acp` remains
+available for compatibility and continues to power named sessions.
 
 Prefer **native same-task continuation** (`run --write-continuation`, then
 `run --continue`) when the same logical one-shot task needs another native turn
@@ -121,6 +146,17 @@ Optional `execution` (or flat aliases) is the dynamic bounded run contract:
 The stable prompt prefix is versioned base instructions + role instructions + a content-addressed context pack + a fixed delimiter. The task manifest and execution contract are the dynamic suffix. Follow-ups send only the dynamic suffix. Never put run IDs, disposable absolute paths, or timestamps in the stable prefix.
 
 Risk tags expand the final verification matrix. Never replace a previously failed required gate with a narrower focused check. Shared API/schema/security/cache/concurrency/build/migration/package changes must expand final gates.
+
+Runner-owned `finalGates` start at the clone root and must be complete executable
+commands, not task aliases such as `pytest` or `testDebugUnitTest`. Include the
+repository wrapper or working directory, for example `npm --prefix services/api
+test`, `.\gradlew.bat -p apps/android testDebugUnitTest`, or `uv run --no-sync
+pytest -q`. When a PowerShell gate sets an environment variable, use
+`Set-Item Env:JAVA_HOME 'C:\path'`; do not put `$env:...` inside an interpolating
+manifest here-string.
+The runner inherits the launcher process environment only. Environment variables
+set inside a Worker's focused-check shell do not flow back into runner-owned
+gates, so repeat required toolchain setup in each self-contained final gate.
 
 ## Commands
 
@@ -242,7 +278,7 @@ grok-worker events --shared-cache-root "$CACHE" --after "" \
   --dispatcher-id "$GROK_WORKER_DISPATCHER_ID" --wait-seconds 30 --json
 grok-worker watch --shared-cache-root "$CACHE" \
   --disposable-root "$DISPOSABLE_ROOT" --run-id "$GROK_WORKER_RUN_ID" \
-  --after "" --wait-seconds 300 --json
+  --after "" --wait-seconds 300 --until-settled --json
 grok-worker preflight --source "$REPO" --json
 grok-worker config-apply \
   --config "$CONFIG" --candidate "$CANDIDATE" \
@@ -254,7 +290,7 @@ grok-worker list-legacy --disposable-root "$DISPOSABLE_ROOT"
 ```
 
 The start receipt is launch acceptance, not task success. After it returns, call
-`watch` with the receipt's `run_id`; carry `next_cursor` into each subsequent
+`watch --until-settled` with the receipt's `run_id`; carry `next_cursor` into each subsequent
 call. If the Codex terminal tool yields a `session_id` while that `watch` process
 is still running, resume that exact terminal session with a blocking empty
 `write_stdin`/wait until the command exits. Tool-level yields may require another
@@ -269,10 +305,10 @@ fields, config-apply rollback semantics, and authority boundaries.
 
 Optional one-shot controls:
 
-- `--backend native|acp`: native is the default; ACP requires `acpx`.
+- `--backend native|acp`: native is the one-shot default; ACP is the compatibility and named-session transport and requires `acpx`.
 - `--execution-manifest PATH`: bounded targets/checks/risk tags/subtasks (dynamic suffix).
 - `--continue` / `--write-continuation`: native same-task continuation. The writer automatically keeps the clone with a 24-hour TTL; final `--continue` without another writer flag closes and cleans it.
-- `--disable-web-search`, `--disallowed-tool NAME` (repeatable), `--max-turns N`: opt-in pure-code tool policy via native Grok flags (plugins/MCP stay available by default).
+- `--disable-web-search`, `--disallowed-tool NAME` (repeatable): opt-in pure-code tool policy via native Grok flags (plugins/MCP stay available by default). The runner intentionally exposes no model-turn cap; inactivity and the absolute safety cap govern runaway work.
 - `--stall-turns N`, `--stall-seconds S`: productive-progress attention thresholds (never kill solely for stall).
 - `--no-native-json-schema`: disable runner-owned JSON Schema result capture (ACP-like disk `result.json`).
 - `--keep "REASON"`: explicit indefinite clone retention.
@@ -293,6 +329,9 @@ Optional one-shot controls:
   `--hard-timeout 86400` is the default absolute safety cap; pass 0 to disable it.
   `lease-set` may adjust either value while the same backend process is running.
 - `--task-id`, `--failure-retain-hours 24`.
+- `--max-workers N` (or `GROK_WORKER_MAX_WORKERS`) sets the per-dispatcher or
+  legacy per-root active limit; all dispatchers sharing the same logical task
+  must use the same value.
 - `--no-prepare-deps`: explicit opt-out of shared dependency preparation.
 
 ## Two independent capacity domains
@@ -301,7 +340,7 @@ Optional one-shot controls:
 
 - Default root: repository-adjacent `.grok-disposable`.
 - Default cap: exactly 6 GiB.
-- Maximum 10 active invocations per explicit dispatcher ID across disposable roots. There is no machine-global limit; without a dispatcher ID, only the legacy per-root limit applies. Idle named sessions do not hold slots; each start/followup/finalize invocation takes a transient slot.
+- Active invocations per explicit dispatcher ID are limited by `--max-workers` (default 10) across disposable roots. There is no machine-global limit; without a dispatcher ID, only the legacy per-root limit applies. Idle named sessions do not hold slots; each start/followup/finalize invocation takes a transient slot.
 - Before creation: reconcile dead workers, run eligible GC, enforce concurrency and capacity.
 - After creation: remeasure; if over cap, roll back only the new clone.
 - Unmarked legacy directories count toward capacity and are never deleted by ordinary GC.
@@ -323,10 +362,12 @@ Workers hold a shared cache-use lease. Cache GC requires an exclusive nonblockin
 
 Never create clone-local `.venv`. Python environments are fingerprinted shared
 environments under `venvs/`; uv, pip, npm, and Poetry caches use their shared
-buckets. A locked Python project attempts one frozen dependency prewarm, then
-workers run with shared cache variables. Prewarm failure is recorded as a
-startup warning and does not prevent Grok from attempting the task; real task
-verification still determines success.
+buckets. A locked Python project attempts one frozen dependency prewarm. Every
+nested npm project with `package.json` plus `package-lock.json` receives a
+clone-local `npm ci` from the shared download cache; source `node_modules` is
+never copied or linked. Prewarm failure is recorded as a startup warning and
+does not prevent Grok from attempting the task; real task verification still
+determines success.
 
 ## Lifecycle and retention
 
@@ -354,6 +395,20 @@ empty verification list. Missing/empty analysis output, partial/failed results,
 malformed structured output, reasoning downgrade, and unverifiable
 implementation results are failures.
 
+Native `max_tokens_truncation` or `max_turns_reached` triggers automatic
+same-session continuation inside the same lifecycle, bounded only by the
+renewable inactivity lease and absolute hard timeout. If recovery still cannot
+finish, the run remains failed, the exact clone/session gets compatible
+continuation metadata, and the budget error remains the primary lifecycle cause;
+a missing structured result is only a secondary contract consequence.
+
+When an execution manifest supplies `finalGates`, they are runner-owned and are
+not included as executable commands in the Grok prompt. Grok may run
+`focusedChecks` while editing; after native structured output the runner executes
+each final gate exactly once, writes atomic `runner-gate-*` evidence, and uses the
+observed exit codes. Gates share the remaining hard-time budget and stop after the
+first failure.
+
 ### Lifecycle / observability
 
 - **Authority**: `.grok-worker/lifecycle.json` is the only state source. Shared-cache
@@ -362,24 +417,29 @@ implementation results are failures.
   pointer; one-shot cleanup then appends `settled`. Startup failures that occur
   after CLI configuration emit `attention`. Events are deduplicated by
   `(run_id, state, kind)` and never carry prompts, tokens, env, file contents, or
-  agent output. Emit is best-effort; lifecycle remains authoritative.
-- **Default waiting**: call `grok-worker watch` with an explicit `run_id` or
-  `dispatcher_id`. It long-polls up to 300 seconds and returns immediately on an
-  event. Only on timeout does it return one compact health heartbeat. Preserve
-  `next_cursor` between calls. For a parallel wave, one dispatcher-scoped watch
-  replaces per-worker status polling.
+  agent output. Each modern run also has a small run-specific receipt so a watcher
+  does not repeatedly parse global history. Emit remains fail-closed: if terminal
+  receipt persistence fails, a successful clone is retained and the lifecycle
+  fallback reports the notification fault instead of losing the outcome.
+- **Default waiting**: for one run, call `grok-worker watch --until-settled` with
+  its explicit `run_id`; it consumes `terminal` and waits through cleanup for
+  `settled` in the same command. For a parallel wave, use one dispatcher-scoped
+  `watch` without `--until-settled`. A watch long-polls up to 300 seconds and only
+  returns one compact health heartbeat on timeout. Preserve `next_cursor` between
+  calls.
 - **Codex tool-use rule**: launch one-shots with `run --detach`, then make one
-  bounded `watch --wait-seconds 300` call at a time. Never keep the launch shell
+  bounded `watch --until-settled --wait-seconds 300` call at a time. Never keep the launch shell
   alive for 10/30-second `write_stdin` checks. When the terminal tool yields a
   live `session_id` for the blocking watch, continue that same session with an
   empty blocking `write_stdin`/wait until it exits; abandoning it loses the
   immediate wakeup. Repeated tool-level yields on that same process are not
   health polling. A watcher returning early means a
   real event arrived; an unchanged heartbeat does not justify reading full logs.
-- **Handoff rule**: on `terminal/success`, inspect the artifact and then watch
-  from `next_cursor` for `settled`; on `attention` or failure, inspect lifecycle
-  and the bounded log tail. An unchanged heartbeat needs no full log read and no
-  user-facing narration.
+- **Handoff rule**: a per-run `--until-settled` response is ready for artifact
+  inspection only when `settled=true`. A running `attention` returns immediately;
+  inspect lifecycle and the bounded log tail, then resume from `next_cursor` if
+  appropriate. An unchanged heartbeat needs no full log read and no user-facing
+  narration.
 - **Live backend attention**: a recognized provider HTTP/auth/rate-limit/
   unavailable failure or ignored reasoning effort emits one non-sensitive
   `running/attention` pointer within the lease poll interval. It wakes `watch`
@@ -388,7 +448,9 @@ implementation results are failures.
 - **Health checks**: `health` remains a diagnostic-only read-only fallback. It reports lifecycle,
   bounded non-symlink workspace activity, fixed progress step, result/artifact
   readiness, process identity, CPU/RSS, and timeout remaining, but never kills,
-  restarts, preempts, or disposes a Worker. The runner renews an activity lease
+  restarts, preempts, or disposes a Worker. Without an explicit root it reads the
+  bounded shared root registry and aggregates all known disposable roots; pass
+  `--disposable-root` for a deliberately single-root view. The runner renews an activity lease
   from managed Grok session events, progress/result files, agent-log growth, and
   bounded workspace activity. A truly quiet worker expires after 1800 seconds by
   default; the separate 24h hard cap prevents an active infinite loop.

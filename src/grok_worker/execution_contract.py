@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -130,6 +134,53 @@ class ExecutionContract:
         if self.required_failed_gates:
             payload["requiredFailedGates"] = list(self.required_failed_gates)
         return payload
+
+    def to_worker_prompt_dict(self) -> dict[str, object]:
+        """Return editing guidance while keeping final execution runner-owned."""
+        payload = self.to_dict()
+        payload.pop("finalGates", None)
+        payload.pop("requiredFailedGates", None)
+        final_count = len(self.runner_final_gates())
+        if final_count:
+            payload["runnerOwnsFinalGates"] = True
+            payload["runnerFinalGateCount"] = final_count
+            payload["finalGateInstruction"] = (
+                "Do not execute runner-owned final gates; the lifecycle runner executes them once."
+            )
+        return payload
+
+    def runner_final_gates(self) -> tuple[str, ...]:
+        """Concrete commands the lifecycle runner owns and executes exactly once."""
+        return tuple(dict.fromkeys((*self.final_gates, *self.required_failed_gates)))
+
+    def validate_runner_gates(self, *, environ: Mapping[str, str] | None = None) -> None:
+        """Reject task labels that cannot be executed from the clone root."""
+        environment = os.environ if environ is None else environ
+        for command in self.runner_final_gates():
+            if command.lstrip().startswith("="):
+                raise ExecutionContractError(
+                    f"final gate {command!r} starts with '='; a PowerShell variable was likely "
+                    "expanded before the manifest reached grok-worker"
+                )
+            if len(command.split()) == 1 and "/" not in command and "\\" not in command:
+                raise ExecutionContractError(
+                    f"final gate {command!r} must be an executable command, not a bare task name; "
+                    "include the repository wrapper and working directory"
+                )
+            if (
+                re.match(
+                    r'^\s*&?\s*(?:"[^"]*gradlew\.bat"|[^\s;]*gradlew\.bat)(?:\s|$)',
+                    command,
+                    re.I,
+                )
+                and not environment.get("JAVA_HOME")
+                and shutil.which("java", path=environment.get("PATH", "")) is None
+            ):
+                raise ExecutionContractError(
+                    f"final gate {command!r} starts gradlew.bat, but the runner environment has "
+                    "neither JAVA_HOME nor java on PATH; prefix the gate with "
+                    "Set-Item Env:JAVA_HOME '<absolute-jdk-path>';"
+                )
 
     def signature(self) -> str:
         encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()

@@ -1,7 +1,7 @@
 """Per-dispatcher concurrency via fixed OS flock slot leases under shared cache.
 
-When ``dispatcher_id`` is set, capacity is reserved by non-blocking exclusive
-``flock`` on one of ten fixed files:
+When ``dispatcher_id`` is set, capacity is reserved by a non-blocking exclusive
+platform lock on one of the configured fixed slot files (10 by default):
 
     $CACHE/dispatchers/<dispatcher_hash>/slots/00.lock .. 09.lock
 
@@ -79,6 +79,10 @@ class DispatcherPathError(RuntimeError):
     """
 
 
+def _is_reparse_point(path: Path) -> bool:
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+
+
 def make_run_id() -> str:
     return uuid.uuid4().hex
 
@@ -115,29 +119,29 @@ def _ensure_managed_dir(cache_root: Path, *parts: str) -> Path:
     a symlink. Errors omit secrets and absolute attacker destinations.
     """
     configured_root = Path(cache_root)
-    if configured_root.is_symlink():
+    if _is_reparse_point(configured_root):
         raise DispatcherPathError("shared cache root is a symlink")
     root = configured_root.resolve()
     current = root
     for part in parts:
         name = _safe_path_component(part, kind="directory")
         candidate = current / name
-        if candidate.is_symlink():
+        if _is_reparse_point(candidate):
             raise DispatcherPathError("dispatcher managed directory is a symlink")
         if not candidate.exists():
             try:
                 candidate.mkdir(mode=0o755, exist_ok=True)
             except OSError as exc:
                 raise DispatcherPathError("cannot create dispatcher managed directory") from exc
-            if candidate.is_symlink():
+            if _is_reparse_point(candidate):
                 raise DispatcherPathError("dispatcher managed directory is a symlink")
-        if not candidate.is_dir() or candidate.is_symlink():
+        if not candidate.is_dir() or _is_reparse_point(candidate):
             raise DispatcherPathError("dispatcher managed path is not a safe directory")
         try:
             resolved = candidate.resolve(strict=True)
         except OSError as exc:
             raise DispatcherPathError("cannot resolve dispatcher managed directory") from exc
-        if resolved.is_symlink():
+        if _is_reparse_point(resolved):
             raise DispatcherPathError("dispatcher managed directory is a symlink")
         _assert_under_cache(resolved, root)
         current = resolved
@@ -151,7 +155,7 @@ def _verified_lock_path(parent_dir: Path, name: str, cache_root: Path) -> Path:
     Callers use the returned path with FileLock (which also refuses symlinks).
     """
     configured_root = Path(cache_root)
-    if configured_root.is_symlink():
+    if _is_reparse_point(configured_root):
         raise DispatcherPathError("shared cache root is a symlink")
     root = configured_root.resolve()
     lock_name = _safe_path_component(name, kind="lock")
@@ -159,11 +163,11 @@ def _verified_lock_path(parent_dir: Path, name: str, cache_root: Path) -> Path:
         parent = parent_dir.resolve(strict=True)
     except OSError as exc:
         raise DispatcherPathError("cannot resolve dispatcher lock parent") from exc
-    if parent.is_symlink() or not parent.is_dir():
+    if _is_reparse_point(parent) or not parent.is_dir():
         raise DispatcherPathError("dispatcher lock parent is not a safe directory")
     _assert_under_cache(parent, root)
     path = parent / lock_name
-    if path.is_symlink():
+    if _is_reparse_point(path):
         raise DispatcherPathError("dispatcher lock path is a symlink")
     if path.exists() and not path.is_file():
         raise DispatcherPathError("dispatcher lock path is not a regular file")
@@ -177,7 +181,7 @@ def _safe_dispatcher_dir(shared_cache_root: Path, dispatcher_id: str) -> Path:
 
 
 def slot_lock_path(shared_cache_root: Path, dispatcher_id: str, index: int) -> Path:
-    if index < 0 or index >= MAX_CONCURRENT_WORKERS:
+    if index < 0:
         raise ValueError(f"slot index out of range: {index}")
     dig = hash_identity(dispatcher_id)
     slots = _ensure_managed_dir(
@@ -200,14 +204,21 @@ def source_lock_path(
     return _verified_lock_path(sources, f"{source_hash}.lock", shared_cache_root)
 
 
-def count_held_slots(shared_cache_root: Path, dispatcher_id: str) -> int:
+def count_held_slots(
+    shared_cache_root: Path,
+    dispatcher_id: str,
+    *,
+    limit: int = MAX_CONCURRENT_WORKERS,
+) -> int:
     """Best-effort count of currently held slot locks (probe with LOCK_NB).
 
     Used only for structured error reporting. Capacity enforcement itself is the
     atomic non-blocking acquire of a free slot file.
     """
     held = 0
-    for i in range(MAX_CONCURRENT_WORKERS):
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    for i in range(limit):
         probe = FileLock(slot_lock_path(shared_cache_root, dispatcher_id, i))
         if probe.try_acquire():
             probe.release()
@@ -229,12 +240,12 @@ def try_acquire_slot(
     """
     if limit < 1:
         raise ValueError("limit must be >= 1")
-    n = min(limit, MAX_CONCURRENT_WORKERS)
+    n = limit
     for i in range(n):
         lock = FileLock(slot_lock_path(shared_cache_root, dispatcher_id, i))
         if lock.try_acquire():
             return lock
-    active = count_held_slots(shared_cache_root, dispatcher_id)
+    active = count_held_slots(shared_cache_root, dispatcher_id, limit=n)
     # Report the hard budget (active may briefly lag; never understate limit).
     report_active = max(active, n)
     raise DispatcherConcurrencyError(report_active, n, dispatcher_id)

@@ -29,6 +29,7 @@ from grok_worker.native_result import (
 from grok_worker.prompt_cache import TaskManifest, build_one_shot_prompt
 from grok_worker.result_schema import ResultError
 from grok_worker.run_config import RunConfig, build_native_cmd
+from grok_worker.runner import run_worker
 from grok_worker.tool_policy import ToolPolicy, apply_native_tool_flags
 
 
@@ -49,6 +50,72 @@ def test_execution_contract_expands_risk_and_preserves_failed_gates() -> None:
     # Previously failed gate cannot be dropped by a narrower proposal.
     with pytest.raises(ExecutionContractError):
         assert_gates_not_narrowed(matrix, ["pytest -q"])
+
+
+def test_worker_prompt_hides_runner_owned_final_gates() -> None:
+    contract = ExecutionContract.from_mapping(
+        {
+            "targetFiles": ["src/a.py"],
+            "focusedChecks": ["pytest tests/test_a.py -q"],
+            "finalGates": ["pytest -q"],
+            "requiredFailedGates": ["ruff check ."],
+        }
+    )
+
+    payload = contract.to_worker_prompt_dict()
+
+    assert payload["targetFiles"] == ["src/a.py"]
+    assert payload["focusedChecks"] == ["pytest tests/test_a.py -q"]
+    assert payload["runnerOwnsFinalGates"] is True
+    assert payload["runnerFinalGateCount"] == 2
+    assert "finalGates" not in payload
+    assert "requiredFailedGates" not in payload
+
+
+@pytest.mark.parametrize("gate", ["testDebugUnitTest", "pytest", "ruff", "mypy"])
+def test_execution_contract_rejects_bare_final_gate(gate: str) -> None:
+    contract = ExecutionContract.from_mapping({"finalGates": [gate]})
+    with pytest.raises(ExecutionContractError, match="executable command"):
+        contract.validate_runner_gates()
+
+
+def test_execution_contract_rejects_expanded_away_powershell_assignment() -> None:
+    contract = ExecutionContract.from_mapping(
+        {"finalGates": ["='C:\\AI\\jdk'; .\\gradlew.bat test"]}
+    )
+    with pytest.raises(ExecutionContractError, match="PowerShell variable"):
+        contract.validate_runner_gates()
+
+
+def test_execution_contract_rejects_direct_gradle_gate_without_java() -> None:
+    contract = ExecutionContract.from_mapping(
+        {"finalGates": [r".\apps\android\gradlew.bat -p apps\android testDebugUnitTest"]}
+    )
+
+    with pytest.raises(ExecutionContractError, match="neither JAVA_HOME nor java on PATH"):
+        contract.validate_runner_gates(environ={"PATH": ""})
+
+
+def test_execution_contract_allows_self_contained_gradle_gate_without_host_java() -> None:
+    contract = ExecutionContract.from_mapping(
+        {
+            "finalGates": [
+                r"Set-Item Env:JAVA_HOME 'C:\toolchain\jdk'; & .\gradlew.bat testDebugUnitTest"
+            ]
+        }
+    )
+
+    contract.validate_runner_gates(environ={"PATH": ""})
+
+
+def test_runner_rejects_bare_gate_before_source_or_backend(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        source=tmp_path / "missing-source",
+        prompt="must never reach a backend",
+        execution=ExecutionContract.from_mapping({"finalGates": ["pytest"]}),
+    )
+    with pytest.raises(ExecutionContractError, match="executable command"):
+        run_worker(cfg)
 
 
 def test_subtasks_hard_cap_and_readonly() -> None:
@@ -108,7 +175,6 @@ def test_tool_policy_signature_and_native_flags() -> None:
         disable_web_search=True,
         disallowed_tools=["WebSearch", "Bash"],
         allow_subagents=False,
-        max_turns=40,
     )
     other = ToolPolicy.from_fields(disable_web_search=True)
     assert policy.signature() != other.signature()
@@ -117,7 +183,7 @@ def test_tool_policy_signature_and_native_flags() -> None:
     assert "--disallowed-tools" in cmd
     assert "WebSearch,Bash" in cmd
     assert "--no-subagents" in cmd
-    assert cmd[cmd.index("--max-turns") + 1] == "40"
+    assert "--max-turns" not in cmd
 
 
 def test_build_native_cmd_includes_json_schema_and_continue(
@@ -133,18 +199,21 @@ def test_build_native_cmd_includes_json_schema_and_continue(
         mode="implementation",
         allow_subagents=True,
         disable_web_search=True,
-        max_turns=12,
         native_json_schema_result=True,
     )
     cmd = build_native_cmd(cfg, tmp_path, prompt, continue_session=True)
     assert "--continue" in cmd
     assert "--json-schema" in cmd
     assert "--disable-web-search" in cmd
-    assert "--max-turns" in cmd
+    assert "--max-turns" not in cmd
     assert "--reasoning-effort" in cmd
     schema_idx = cmd.index("--json-schema") + 1
     schema = json.loads(cmd[schema_idx])
     assert schema["required"] == worker_result_json_schema()["required"]
+    policy = cfg.effective_run_policy()
+    assert policy["model_turn_limit"] is None
+    assert policy["output_token_limit"] == "not_configured_by_grok_worker"
+    assert "max_turns" not in json.dumps(policy)
 
 
 def test_native_result_extract_and_persist(tmp_path: Path) -> None:
@@ -174,6 +243,33 @@ def test_native_result_extract_and_persist(tmp_path: Path) -> None:
 
     with pytest.raises(ResultError):
         extract_structured_result_from_text("not json at all")
+
+
+def test_native_result_prefers_grok_structured_output_over_progress_json() -> None:
+    partial = {
+        "schema_version": 1,
+        "task_completed": False,
+        "status": "partial",
+        "summary": "work in progress",
+        "findings": [],
+        "verification": [],
+    }
+    completed = {
+        "schema_version": 1,
+        "task_completed": True,
+        "status": "completed",
+        "summary": "done",
+        "findings": [],
+        "verification": [],
+    }
+    envelope = json.dumps(
+        {
+            "text": json.dumps(partial) + json.dumps(completed),
+            "structuredOutput": completed,
+        }
+    )
+
+    assert extract_structured_result_from_text(envelope) == completed
 
 
 def test_continuation_ttl_and_contract_mismatch(tmp_path: Path) -> None:

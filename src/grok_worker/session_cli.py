@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import typer
 
-from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_HARD_TIMEOUT
+from grok_worker.constants import DEFAULT_ACPX_TIMEOUT, DEFAULT_HARD_TIMEOUT, MAX_CONCURRENT_WORKERS
 from grok_worker.paths import (
     default_artifact_root,
     default_disposable_root,
@@ -26,7 +27,7 @@ def _config(
     disposable_root: Path | None,
     artifact_root: Path | None,
     shared_cache_root: Path | None,
-    acpx_bin: str,
+    acpx_bin: str | None,
     agent_bin: str | None,
     mcp_config: str | None,
     model: str | None,
@@ -34,6 +35,7 @@ def _config(
     allow_subagents: bool,
     timeout: int,
     hard_timeout: int,
+    max_workers: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     resolved_source = source.resolve()
@@ -67,6 +69,7 @@ def _config(
         allow_subagents=allow_subagents,
         timeout=timeout,
         hard_timeout=None if hard_timeout == 0 else hard_timeout,
+        max_workers=max_workers,
         prepare_deps=not no_prepare_deps,
     )
 
@@ -99,7 +102,7 @@ def _options(
     disposable_root: Path | None,
     artifact_root: Path | None,
     shared_cache_root: Path | None,
-    acpx_bin: str,
+    acpx_bin: str | None,
     agent_bin: str | None,
     mcp_config: str | None,
     model: str | None,
@@ -107,6 +110,7 @@ def _options(
     allow_subagents: bool,
     timeout: int,
     hard_timeout: int,
+    max_workers: int,
     no_prepare_deps: bool,
 ) -> SessionConfig:
     return _config(
@@ -125,6 +129,7 @@ def _options(
         allow_subagents,
         timeout,
         hard_timeout,
+        max_workers,
         no_prepare_deps,
     )
 
@@ -138,12 +143,16 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
         disposable_root: Path | None = typer.Option(None, "--disposable-root"),
         artifact_root: Path | None = typer.Option(None, "--artifact-root"),
         shared_cache_root: Path | None = typer.Option(None, "--shared-cache-root"),
-        acpx_bin: str = typer.Option("acpx", "--acpx-bin"),
+        acpx_bin: str | None = typer.Option(
+            None,
+            "--acpx-bin",
+            help="Explicit acpx override (default: pinned grok-worker runtime on Windows)",
+        ),
         agent_bin: str | None = typer.Option(None, "--agent-bin"),
         mcp_config: str | None = typer.Option(None, "--mcp-config"),
         model: str | None = typer.Option(None, "--model"),
         reasoning_effort: str | None = typer.Option(None, "--reasoning-effort"),
-        allow_subagents: bool = typer.Option(True, "--allow-subagents/--no-subagents"),
+        allow_subagents: bool = typer.Option(False, "--allow-subagents"),
         timeout: int = typer.Option(
             DEFAULT_ACPX_TIMEOUT,
             "--timeout",
@@ -154,13 +163,17 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
             "--hard-timeout",
             help="Absolute safety cap seconds; 0 disables it",
         ),
+        max_workers: int = typer.Option(
+            MAX_CONCURRENT_WORKERS,
+            "--max-workers",
+            envvar="GROK_WORKER_MAX_WORKERS",
+            min=1,
+        ),
         no_prepare_deps: bool = typer.Option(False, "--no-prepare-deps"),
         dispatcher_id: str | None = typer.Option(None, "--dispatcher-id"),
         run_id: str | None = typer.Option(None, "--run-id"),
     ) -> None:
         """Operate one immutable logical-task named session."""
-        import os
-
         cfg = _options(
             source,
             manifest_file,
@@ -177,6 +190,7 @@ def _session_command(action: str):  # type: ignore[no-untyped-def]
             allow_subagents,
             timeout,
             hard_timeout,
+            max_workers,
             no_prepare_deps,
         )
         cfg.dispatcher_id = dispatcher_id or os.environ.get("GROK_WORKER_DISPATCHER_ID") or None

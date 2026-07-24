@@ -10,7 +10,7 @@ from grok_worker.activity_lease import LeaseError, read_lease
 from grok_worker.cache_policy import CachePolicy, ensure_cache_capacity
 from grok_worker.capacity import enforce_cap, enforce_concurrency
 from grok_worker.clone import create_workspace
-from grok_worker.constants import MANAGED_BY, MAX_CONCURRENT_WORKERS, SCHEMA_VERSION
+from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
 from grok_worker.dispatcher import (
     DispatcherLease,
     make_run_id,
@@ -64,7 +64,7 @@ def _acquire_session_invocation_lease(cfg: SessionConfig) -> DispatcherLease | N
         cfg.dispatcher_id,
         mode=cfg.mode,
         source_realpath=str(cfg.source.resolve()) if cfg.mode == "implementation" else None,
-        limit=MAX_CONCURRENT_WORKERS,
+        limit=cfg.max_workers,
     )
 
 
@@ -99,7 +99,7 @@ def start_session(cfg: SessionConfig) -> SessionOutcome:
             # must not permanently reserve an OS slot; with dispatcher_id the
             # transient lease above is the capacity primitive.
             if not cfg.dispatcher_id:
-                enforce_concurrency(disposable, MAX_CONCURRENT_WORKERS)
+                enforce_concurrency(disposable, cfg.max_workers)
             enforce_cap(disposable, cfg.cap_bytes)
             clone, base, fingerprint, disclosure = create_workspace(
                 source, disposable, manifest.task_id

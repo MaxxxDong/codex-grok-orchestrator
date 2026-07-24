@@ -66,7 +66,11 @@ def test_extended_timeout_3600_supported(
 
 def test_ordinary_timeout_is_worker_lease_not_acpx_deadline(tmp_path: Path) -> None:
     cfg = RunConfig(
-        source=tmp_path, prompt="p", backend="acp", timeout=DEFAULT_ACPX_TIMEOUT
+        source=tmp_path,
+        prompt="p",
+        backend="acp",
+        acpx_bin="acpx",
+        timeout=DEFAULT_ACPX_TIMEOUT,
     )
     cmd = build_acpx_cmd(cfg, tmp_path, "agent", "hello")
     assert "--timeout" not in cmd
@@ -105,6 +109,7 @@ def test_prompt_only_research_auto_approves_non_terminal_search_tools(tmp_path: 
         source=None,
         prompt="Research current public evidence.",
         backend="acp",
+        acpx_bin="acpx",
         prompt_only=True,
         mode="research",
     )

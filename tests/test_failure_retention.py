@@ -162,3 +162,22 @@ def test_read_only_analysis_can_finalize_from_nonempty_agent_log(
     assert outcome.exit_code == 0  # type: ignore[attr-defined]
     assert outcome.state == "success"  # type: ignore[attr-defined]
     assert outcome.clone_path is None  # type: ignore[attr-defined]
+
+
+def test_cancelled_analysis_envelope_is_not_synthesized_as_success(
+    git_source: Path,
+    tmp_roots: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome = _run(
+        git_source,
+        tmp_roots,
+        monkeypatch,
+        "cancelled_analysis_envelope",
+        "cancelled-analysis",
+        mode="analysis",
+    )
+
+    clone = _assert_retained_24h(outcome, tmp_roots)
+    meta = WorkerMeta.read(meta_path(clone))
+    assert "analysis backend returned stopReason=Cancelled" in (meta.error_message or "")

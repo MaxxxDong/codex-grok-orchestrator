@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from grok_worker.constants import (
     DEFAULT_HARD_TIMEOUT,
@@ -27,6 +27,8 @@ from grok_worker.grok_state import clone_session_root
 from grok_worker.locks import FileLock
 from grok_worker.models import atomic_write_text, dt_to_iso, utc_now
 from grok_worker.paths import meta_dir
+from grok_worker.process_identity import windows_descendant_pids
+from grok_worker.process_launch import hidden_startup_info
 from grok_worker.status import workspace_activity_at
 
 LEASE_SCHEMA_VERSION = 1
@@ -287,7 +289,13 @@ def run_with_activity_lease(
             stdout=stream,
             stderr=subprocess.STDOUT,
             env=env,
-            start_new_session=True,
+            start_new_session=os.name != "nt",
+            startupinfo=hidden_startup_info(),
+            creationflags=(
+                int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if os.name == "nt"
+                else 0
+            ),
         )
         if on_start is not None:
             on_start(process)
@@ -336,10 +344,34 @@ def run_with_activity_lease(
 
 
 def terminate_process_tree(process: subprocess.Popen[Any], grace_seconds: float = 5.0) -> None:
+    if os.name == "nt":
+        targets = [process.pid] if process.poll() is None else []
+        targets.extend(windows_descendant_pids(process.pid))
+        for pid in dict.fromkeys(targets):
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    timeout=grace_seconds,
+                    creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if process.poll() is None:
+            try:
+                process.wait(timeout=grace_seconds)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+        return
     if process.poll() is not None:
         return
+    kill_process_group = cast(Any, os).killpg
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        kill_process_group(process.pid, signal.SIGTERM)
     except OSError:
         try:
             process.terminate()
@@ -351,7 +383,7 @@ def terminate_process_tree(process: subprocess.Popen[Any], grace_seconds: float 
     except subprocess.TimeoutExpired:
         pass
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        kill_process_group(process.pid, cast(Any, signal).SIGKILL)
     except OSError:
         try:
             process.kill()

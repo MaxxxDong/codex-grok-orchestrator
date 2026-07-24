@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -12,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from grok_worker.constants import MANAGED_BY, SCHEMA_VERSION
+
+_WINDOWS_REPLACE_ATTEMPTS = 30
+_WINDOWS_REPLACE_RETRY_SECONDS = 0.1
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
 
 
 class WorkerState(StrEnum):
@@ -55,6 +60,22 @@ def dt_from_iso(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def atomic_replace(source: str | Path, target: Path) -> None:
+    """Replace a file atomically, retrying only transient Windows sharing failures."""
+    for attempt in range(_WINDOWS_REPLACE_ATTEMPTS if os.name == "nt" else 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            transient = (
+                os.name == "nt"
+                and getattr(exc, "winerror", None) in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+            )
+            if not transient or attempt == _WINDOWS_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_WINDOWS_REPLACE_RETRY_SECONDS)
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write via tempfile in the same directory then os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +85,7 @@ def atomic_write_text(path: Path, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_name, path)
+        atomic_replace(tmp_name, path)
     except Exception:
         try:
             os.unlink(tmp_name)
@@ -98,6 +119,10 @@ class WorkerMeta:
     result_status: str | None = None
     acpx_exit_code: int | None = None
     error_message: str | None = None
+    # Bounded runner-owned classification. This never contains provider output.
+    failure_kind: str | None = None
+    continuation_ready: bool = False
+    terminal_event_ready: bool = False
     legacy_classification: str | None = None
     source_state_fingerprint: str | None = None
     interrupted: bool = False
@@ -115,6 +140,8 @@ class WorkerMeta:
     # Structured disclosure summary (values/content/prompt/env-free). Survives
     # successful clone deletion because lifecycle is copied into worker.log.
     disclosure_summary: dict[str, Any] | None = None
+    # Sanitized effective runner policy; never contains prompts, keys, or env.
+    effective_run: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -150,6 +177,9 @@ class WorkerMeta:
             result_status=data.get("result_status"),
             acpx_exit_code=data.get("acpx_exit_code"),
             error_message=data.get("error_message"),
+            failure_kind=_optional_str(data.get("failure_kind")),
+            continuation_ready=bool(data.get("continuation_ready", False)),
+            terminal_event_ready=bool(data.get("terminal_event_ready", False)),
             legacy_classification=data.get("legacy_classification"),
             source_state_fingerprint=data.get("source_state_fingerprint"),
             interrupted=bool(data.get("interrupted", False)),
@@ -159,6 +189,7 @@ class WorkerMeta:
             mode=_optional_str(data.get("mode")),
             backend=_optional_str(data.get("backend")),
             disclosure_summary=_optional_disclosure(data.get("disclosure_summary")),
+            effective_run=_optional_mapping(data.get("effective_run")),
         )
 
     @classmethod
@@ -224,6 +255,12 @@ def _optional_disclosure(value: Any) -> dict[str, Any] | None:
                     nested[nk] = nv
             out[key] = nested
     return out if out else None
+
+
+def _optional_mapping(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return dict(value)
 
 
 def meta_is_trusted(meta: WorkerMeta) -> bool:

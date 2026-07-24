@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 from grok_worker.artifacts import ArtifactError, collect_artifacts
-from grok_worker.completion_events import emit_completion_event
+from grok_worker.completion_events import emit_completion_event, list_completion_events
 from grok_worker.continuation import DEFAULT_CONTINUATION_TTL_HOURS
 from grok_worker.deps import detect_clone_local_env
 from grok_worker.models import WorkerMeta, WorkerState, dt_to_iso, utc_now
@@ -59,6 +60,23 @@ _REASONING_DOWNGRADE_RE = re.compile(
     r"model does not support reasoning effort; ignoring",
     re.IGNORECASE,
 )
+_MAX_TOKENS_RE = re.compile(
+    r'"error_kind"\s*:\s*"max_tokens_truncation"|\bmax_tokens_truncation\b',
+    re.IGNORECASE,
+)
+_MAX_TURNS_RE = re.compile(
+    r'(?:"type"\s*:\s*"max_turns_reached"|^\s*Error:\s*max turns reached\s*$)',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class BackendFailure:
+    """Non-sensitive failure classification owned by the lifecycle runner."""
+
+    kind: str
+    summary: str
+    continuation_safe: bool = False
 
 
 def _bounded_failure_text(agent_output: str) -> str:
@@ -117,20 +135,43 @@ def summarize_acp_failure(agent_output: str) -> str | None:
     return f"upstream ACP failure: {detail}"
 
 
-def summarize_backend_failure(agent_output: str) -> str | None:
-    """Classify bounded structured startup, ACP, or native JSON failures."""
+def classify_backend_failure(agent_output: str) -> BackendFailure | None:
+    """Classify bounded structured backend failures in priority order."""
+    if not agent_output:
+        return None
+    snippet = _bounded_failure_text(agent_output)
+    if _MAX_TOKENS_RE.search(snippet):
+        return BackendFailure(
+            kind="max_tokens_truncation",
+            summary="upstream native failure: response truncated by max_tokens",
+            continuation_safe=True,
+        )
+    if _MAX_TURNS_RE.search(snippet):
+        return BackendFailure(
+            kind="max_turns_reached",
+            summary="upstream native failure: max turns reached",
+            continuation_safe=True,
+        )
     acp = summarize_acp_failure(agent_output)
     if acp:
-        return acp
-    snippet = _bounded_failure_text(agent_output)
+        return BackendFailure(kind="backend_transport_error", summary=acp)
     startup = _STARTUP_ERROR_RE.search(snippet)
     if startup:
-        return f"backend startup failure: {' '.join(startup.group(1).split())}"
+        return BackendFailure(
+            kind="backend_startup_failure",
+            summary=f"backend startup failure: {' '.join(startup.group(1).split())}",
+        )
     status = _provider_status(snippet)
     if status is not None:
-        return f"upstream provider failure: HTTP {status}"
+        return BackendFailure(
+            kind=f"provider_http_{status}",
+            summary=f"upstream provider failure: HTTP {status}",
+        )
     if _PROVIDER_UNAVAILABLE_RE.search(snippet):
-        return "upstream provider failure: service unavailable"
+        return BackendFailure(
+            kind="provider_unavailable",
+            summary="upstream provider failure: service unavailable",
+        )
     for line in snippet.splitlines():
         try:
             payload = json.loads(line)
@@ -141,8 +182,17 @@ def summarize_backend_failure(agent_output: str) -> str | None:
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             detail = " ".join(message.split())[:160]
-            return f"upstream native failure: {detail}"
+            return BackendFailure(
+                kind="native_backend_error",
+                summary=f"upstream native failure: {detail}",
+            )
     return None
+
+
+def summarize_backend_failure(agent_output: str) -> str | None:
+    """Return the safe summary for a bounded backend failure."""
+    failure = classify_backend_failure(agent_output)
+    return failure.summary if failure is not None else None
 
 
 def _compose_result_error_message(exc: BaseException, agent_log: Path | None) -> str:
@@ -157,14 +207,23 @@ def _compose_result_error_message(exc: BaseException, agent_log: Path | None) ->
     backend_summary = summarize_backend_failure(agent_output)
     if not backend_summary:
         return structured
-    return f"{structured}; {backend_summary}"
+    return f"{backend_summary}; secondary result contract failure: {structured}"
+
+
+def _compose_artifact_error_message(primary: str | None, exc: BaseException) -> str:
+    secondary = f"artifact finalization failed: {exc}"
+    if not primary:
+        return secondary
+    if secondary in primary:
+        return primary
+    return f"{primary}; secondary {secondary}"
 
 
 def _notify_terminal(
     meta: WorkerMeta,
     *,
     shared_cache_root: Path | None = None,
-) -> None:
+) -> bool:
     """Append a deduplicated completion notification for a terminal state."""
     if meta.state not in (
         WorkerState.SUCCESS,
@@ -172,9 +231,9 @@ def _notify_terminal(
         WorkerState.KEEP,
         WorkerState.LEGACY_IMPORTED,
     ):
-        return
+        return False
     root = shared_cache_root
-    emit_completion_event(
+    event = emit_completion_event(
         task_id=meta.task_id,
         state=str(meta.state),
         artifact_path=meta.artifact_path,
@@ -183,6 +242,24 @@ def _notify_terminal(
         run_id=meta.run_id,
         dispatcher_id=meta.dispatcher_id,
     )
+    ready = event is not None
+    if not ready and meta.run_id:
+        existing = list_completion_events(
+            shared_cache_root=root,
+            run_id=meta.run_id,
+            wait_seconds=0,
+        )
+        ready = any(
+            item.get("state") == str(meta.state)
+            and item.get("kind", "terminal") == "terminal"
+            for item in existing
+        )
+    meta.terminal_event_ready = ready
+    try:
+        meta.write(meta_path(Path(meta.clone_realpath)))
+    except OSError:
+        pass
+    return meta.terminal_event_ready
 
 
 def mark_failed(
@@ -328,8 +405,9 @@ def finalize_run(
         # Preserve a prior authoritative runner message (e.g. reasoning-effort ignored).
         composed = _compose_result_error_message(exc, agent_log)
         if meta.error_message:
-            if composed not in meta.error_message:
-                meta.error_message = f"{meta.error_message}; {composed}"
+            secondary = f"secondary result contract failure: {exc}"
+            if secondary not in meta.error_message:
+                meta.error_message = f"{meta.error_message}; {secondary}"
         else:
             meta.error_message = composed
         result = None  # invalid/unverified result must not count as success
@@ -412,7 +490,7 @@ def finalize_run(
             meta,
             clone,
             retain_hours=cfg.failure_retain_hours,
-            message=f"artifact finalization failed: {exc}",
+            message=_compose_artifact_error_message(meta.error_message, exc),
             exit_code=1 if acpx_exit == 0 else acpx_exit,
             shared_cache_root=shared,
         )
@@ -443,13 +521,20 @@ def finalize_run(
             pass
 
     clone_out: str | None = str(clone)
-    if meta.state == WorkerState.SUCCESS and meta.artifact_complete:
+    if (
+        meta.state == WorkerState.SUCCESS
+        and meta.artifact_complete
+        and meta.terminal_event_ready
+    ):
         try:
             safe_rmtree(clone, disposable_root=disposable, protected=protected)
             clone_out = None
         except SafetyError as exc:
             meta.error_message = f"success but clone delete failed: {exc}"
             meta.write(meta_path(clone))
+    elif meta.state == WorkerState.SUCCESS and not meta.terminal_event_ready:
+        meta.error_message = "success retained because terminal notification was not durable"
+        meta.write(meta_path(clone))
 
     ok_states = (WorkerState.SUCCESS, WorkerState.KEEP)
     code = 0 if success and meta.state in ok_states else (meta.exit_code or 1)
@@ -459,7 +544,11 @@ def finalize_run(
         exit_code=code,
         clone_path=clone_out,
         artifact_path=str(art),
-        message="ok" if success else (meta.error_message or "task failed"),
+        message=(
+            "ok"
+            if success and meta.terminal_event_ready
+            else (meta.error_message or "task failed")
+        ),
         run_id=meta.run_id,
         dispatcher_id=meta.dispatcher_id,
     )

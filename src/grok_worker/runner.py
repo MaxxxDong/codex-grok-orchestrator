@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from grok_worker.cache_policy import CachePolicy, ensure_cache_capacity
@@ -36,6 +37,7 @@ from grok_worker.paths import (
     is_managed_clone,
     meta_path,
 )
+from grok_worker.root_registry import register_disposable_root
 from grok_worker.run_config import RunConfig, RunOutcome, default_agent_bin
 from grok_worker.safety import SafetyError, safe_rmtree, safe_unlink
 from grok_worker.task_id import TaskIdError, validate_task_id
@@ -45,6 +47,7 @@ __all__ = ["RunConfig", "RunOutcome", "run_worker"]
 
 
 def run_worker(cfg: RunConfig) -> RunOutcome:
+    (cfg.execution or ExecutionContract.empty()).validate_runner_gates()
     if cfg.prompt_only:
         if cfg.mode == "implementation":
             raise CloneError("prompt-only mode rejects implementation mode")
@@ -74,6 +77,14 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
     disposable.mkdir(parents=True, exist_ok=True)
     artifacts.mkdir(parents=True, exist_ok=True)
     shared.mkdir(parents=True, exist_ok=True)
+    try:
+        register_disposable_root(shared, disposable)
+    except OSError as exc:
+        warnings.warn(
+            f"cross-root health registry unavailable: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     protected = [artifacts, shared, Path.home(), disposable]
     if source is not None:
         protected.insert(0, source)
@@ -135,8 +146,13 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta = WorkerMeta.read(meta_path(clone))
                 if meta.managed_by != MANAGED_BY or meta.task_id != task_id:
                     raise CloneError("continuation lifecycle identity mismatch")
-                if meta.state != WorkerState.KEEP:
-                    raise CloneError(f"continuation requires retained keep state, got {meta.state}")
+                if meta.state != WorkerState.KEEP and not (
+                    meta.state == WorkerState.FAILED and meta.continuation_ready
+                ):
+                    raise CloneError(
+                        "continuation requires retained keep or recoverable state, "
+                        f"got {meta.state}"
+                    )
                 if meta.source_realpath != source_realpath:
                     raise CloneError("continuation source does not match retained clone")
                 assert_continuation_usable(
@@ -171,6 +187,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta.dispatcher_id = cfg.dispatcher_id
                 meta.mode = mode
                 meta.backend = cfg.backend
+                meta.effective_run = cfg.effective_run_policy()
                 meta.timeout_seconds = int(cfg.timeout)
                 meta.keep_reason = None
                 meta.retention_deadline = None
@@ -180,6 +197,8 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                 meta.result_status = None
                 meta.acpx_exit_code = None
                 meta.error_message = None
+                meta.failure_kind = None
+                meta.continuation_ready = False
                 meta.interrupted = False
                 meta.runner_pid = None
                 meta.runner_start_token = None
@@ -243,6 +262,7 @@ def run_worker(cfg: RunConfig) -> RunOutcome:
                     mode=mode,
                     backend=cfg.backend,
                     disclosure_summary=disc_dict,
+                    effective_run=cfg.effective_run_policy(),
                 )
                 meta.write(meta_path(clone))
 

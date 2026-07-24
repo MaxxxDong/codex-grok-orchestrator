@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from grok_worker.cli_cmds import _resolve_disposable
+
 CANDIDATE = Path(__file__).resolve().parents[1]
 
 
@@ -41,7 +43,7 @@ def test_installed_launcher_arbitrary_cwd(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["GROK_WORKER_SKILL_ROOT"] = str(CANDIDATE)
     env["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
-    launcher = CANDIDATE / "bin" / "grok-worker"
+    launcher = CANDIDATE / "bin" / ("grok-worker.cmd" if os.name == "nt" else "grok-worker")
     proc = subprocess.run(
         [str(launcher), "status", "--disposable-root", str(tmp_path / "d")],
         cwd="/",
@@ -51,3 +53,14 @@ def test_installed_launcher_arbitrary_cwd(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "disposable_root" in proc.stdout or "usage_bytes" in proc.stdout
+
+
+def test_default_status_root_matches_run_root_for_git_checkout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    checkout = tmp_path / "repo"
+    checkout.mkdir()
+    (checkout / ".git").mkdir()
+    monkeypatch.chdir(checkout)
+
+    assert _resolve_disposable(None, None) == (tmp_path / ".grok-disposable").resolve()

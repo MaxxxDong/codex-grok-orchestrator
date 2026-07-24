@@ -11,6 +11,7 @@ import grok_worker.clone as clone_module
 from grok_worker.clone import CloneError, create_workspace
 from grok_worker.patch_capture import PatchError, collect_git_patch
 from tests.conftest import init_git_repo
+from tests.path_helpers import symlink_or_skip
 
 
 def test_patch_covers_changes_and_exclusions(tmp_path: Path) -> None:
@@ -75,7 +76,7 @@ def test_nongit_reconstructable_patch(tmp_path: Path) -> None:
     src.mkdir()
     (src / "a.txt").write_text("base\n", encoding="utf-8")
     # preserve symlink as symlink
-    (src / "link").symlink_to("a.txt")
+    symlink_or_skip(src / "link", "a.txt")
     disp = tmp_path / "disp"
     disp.mkdir()
     clone, base, _fp, _disc = create_workspace(src, disp, "ng01")
@@ -408,7 +409,10 @@ def test_dirty_symlink_escape_refused(tmp_path: Path) -> None:
     victim = tmp_path / "victim-secret"
     victim.write_text("host-secret\n", encoding="utf-8")
     link = src / "escape-link"
-    link.symlink_to(victim)
+    try:
+        link.symlink_to(victim)
+    except OSError:
+        pytest.skip("file symlink creation is unavailable for this Windows token")
     disp = tmp_path / "disp"
     disp.mkdir()
     with pytest.raises(CloneError, match="symlink|refuse|dirty"):

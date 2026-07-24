@@ -6,14 +6,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 CANDIDATE = Path(__file__).resolve().parents[1]
 
 
 def test_wrapper_policy_contents() -> None:
     wrapper = (CANDIDATE / "bin" / "grok-acp-worker").read_text(encoding="utf-8")
-    entry = (CANDIDATE / "src" / "grok_worker" / "agent_entry.py").read_text(
-        encoding="utf-8"
-    )
+    entry = (CANDIDATE / "src" / "grok_worker" / "agent_entry.py").read_text(encoding="utf-8")
     assert "GROK_WORKER_LIFECYCLE" in entry
     assert "GROK_WORKER_MODEL" in entry or "default_model" in entry
     assert "GROK_WORKER_ALLOW_SUBAGENTS" in entry
@@ -28,8 +28,9 @@ def test_wrapper_hard_fail_without_lifecycle() -> None:
     env = os.environ.copy()
     env.pop("GROK_WORKER_LIFECYCLE", None)
     env.pop("GROK_WORKER_ALLOW_DIRECT_AGENT", None)
+    wrapper = CANDIDATE / "bin" / ("grok-acp-worker.cmd" if os.name == "nt" else "grok-acp-worker")
     proc = subprocess.run(
-        [str(CANDIDATE / "bin" / "grok-acp-worker")],
+        [str(wrapper)],
         capture_output=True,
         text=True,
         env=env,
@@ -78,6 +79,7 @@ def _launcher_without_venv(tmp_path: Path) -> Path:
     return launcher
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell launcher contract")
 def test_launcher_falls_back_when_default_cache_is_unwritable(tmp_path: Path) -> None:
     fake_bin = _fake_uv(tmp_path)
     launcher = _launcher_without_venv(tmp_path)
@@ -110,6 +112,7 @@ def test_launcher_falls_back_when_default_cache_is_unwritable(tmp_path: Path) ->
     assert "default cache was not writable" in proc.stderr
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell launcher contract")
 def test_launcher_rejects_explicit_unwritable_cache(tmp_path: Path) -> None:
     fake_bin = _fake_uv(tmp_path)
     launcher = _launcher_without_venv(tmp_path)
@@ -135,6 +138,7 @@ def test_launcher_rejects_explicit_unwritable_cache(tmp_path: Path) -> None:
     assert "configured cache root is not writable" in proc.stderr
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell launcher contract")
 def test_launcher_rejects_explicit_symlink_cache(tmp_path: Path) -> None:
     fake_bin = _fake_uv(tmp_path)
     launcher = _launcher_without_venv(tmp_path)

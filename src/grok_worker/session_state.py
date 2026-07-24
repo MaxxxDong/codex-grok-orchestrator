@@ -126,6 +126,7 @@ def permission_signature(
     model: str,
     reasoning_effort: str,
     allow_subagents: bool,
+    acpx_runtime: str = "",
 ) -> str:
     payload = json.dumps(
         {
@@ -135,6 +136,7 @@ def permission_signature(
             "model": model,
             "reasoning_effort": reasoning_effort,
             "allow_subagents": allow_subagents,
+            "acpx_runtime": acpx_runtime,
         },
         sort_keys=True,
     )

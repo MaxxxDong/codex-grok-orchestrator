@@ -173,6 +173,12 @@ def _claim_destination(dest: Path) -> tuple[int, int, int]:
         dest.mkdir(parents=True, mode=0o700, exist_ok=False)
     except FileExistsError as exc:
         raise CloneError(f"refusing existing path: {dest}") from exc
+    if os.name == "nt":
+        try:
+            return _open_windows_directory(dest)
+        except OSError:
+            dest.rmdir()
+            raise
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(dest, flags)
@@ -184,7 +190,84 @@ def _claim_destination(dest: Path) -> tuple[int, int, int]:
 
 
 def _release_destination(owner: tuple[int, int, int]) -> None:
-    os.close(owner[2])
+    if os.name == "nt":
+        import ctypes
+
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(  # type: ignore[attr-defined]
+            owner[2]
+        )
+    else:
+        os.close(owner[2])
+
+
+def _open_windows_directory(path: Path) -> tuple[int, int, int]:
+    """Open a directory reparse-safe and return volume/file identity plus handle."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        0,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x02000000 | 0x00200000,
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if handle in (None, invalid):
+        error = ctypes.get_last_error()  # type: ignore[attr-defined]
+        raise OSError(error, ctypes.FormatError(error), str(path))  # type: ignore[attr-defined]
+    info = ByHandleFileInformation()
+    get_info = kernel32.GetFileInformationByHandle
+    get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(ByHandleFileInformation)]
+    get_info.restype = wintypes.BOOL
+    if not get_info(handle, ctypes.byref(info)):
+        error = ctypes.get_last_error()  # type: ignore[attr-defined]
+        kernel32.CloseHandle(handle)
+        raise OSError(error, ctypes.FormatError(error), str(path))  # type: ignore[attr-defined]
+    if info.dwFileAttributes & 0x00000400:
+        kernel32.CloseHandle(handle)
+        raise CloneError("refusing reparse-point clone destination")
+    file_id = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+    return int(info.dwVolumeSerialNumber), file_id, int(handle)
+
+
+def _destination_identity(path: Path) -> tuple[int, int]:
+    if os.name == "nt":
+        owner = _open_windows_directory(path)
+        try:
+            return owner[:2]
+        finally:
+            _release_destination(owner)
+    stat = path.stat(follow_symlinks=False)
+    return stat.st_dev, stat.st_ino
 
 
 def _remove_partial_destination(dest: Path, owner: tuple[int, int, int]) -> bool:
@@ -202,10 +285,11 @@ def _remove_partial_destination(dest: Path, owner: tuple[int, int, int]) -> bool
                 return True
             return False
         try:
-            stat = quarantine.stat(follow_symlinks=False)
-        except OSError:
+            identity = _destination_identity(quarantine)
+        except (OSError, CloneError):
             return False
-        if quarantine.is_symlink() or (stat.st_dev, stat.st_ino) != owner[:2]:
+        is_junction = getattr(quarantine, "is_junction", lambda: False)()
+        if quarantine.is_symlink() or is_junction or identity != owner[:2]:
             # Preserve an unexpected replacement. Best-effort restore its public
             # name; if that raced too, leave the quarantined bytes untouched.
             if not dest.exists() and not dest.is_symlink():
@@ -250,6 +334,17 @@ def _untracked_rels(repo: Path) -> list[str]:
     return out
 
 
+def _tracked_dirty_rels(repo: Path) -> set[str]:
+    raw = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", "HEAD"]
+    )
+    return {
+        item.decode("utf-8", errors="surrogateescape")
+        for item in raw.split(b"\0")
+        if item
+    }
+
+
 def _apply_dirty_to_clone(
     source: Path,
     clone: Path,
@@ -280,21 +375,11 @@ def _apply_dirty_to_clone(
             if src_f.is_symlink() or src_f.is_file():
                 _copy_path(src_f, clone / rel)
     else:
-        # Path-scoped: apply full HEAD diff then reset unlisted paths, or apply
-        # path-limited diffs. Prefer path-limited for determinism.
         if allowed:
-            # Tracked changes for allowlisted paths.
+            # Keep the Windows command line bounded; reject a source race after
+            # applying rather than putting every dirty path on git's argv.
             tracked = subprocess.check_output(
-                [
-                    "git",
-                    "-C",
-                    str(source),
-                    "diff",
-                    "--binary",
-                    "HEAD",
-                    "--",
-                    *sorted(allowed),
-                ]
+                ["git", "-C", str(source), "diff", "--binary", "HEAD"]
             )
             if tracked.strip():
                 proc = subprocess.run(
@@ -306,6 +391,8 @@ def _apply_dirty_to_clone(
                 if proc.returncode != 0:
                     err = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
                     raise CloneError(f"failed applying dirty diff to clone: {err}")
+            if _tracked_dirty_rels(clone) - allowed:
+                raise CloneError("source changed during dirty snapshot; retrying cleanly")
             untracked = set(_untracked_rels(source))
             for rel in sorted(allowed):
                 if rel in untracked:
@@ -357,12 +444,9 @@ def source_state_fingerprint(
         h.update(git_head(source).encode())
         if allowlist is not None:
             paths = sorted(set(allowlist))
-            if paths:
-                h.update(
-                    subprocess.check_output(
-                        ["git", "-C", str(source), "diff", "--binary", "HEAD", "--", *paths]
-                    )
-                )
+            h.update(
+                subprocess.check_output(["git", "-C", str(source), "diff", "--binary", "HEAD"])
+            )
             untracked = set(_untracked_rels(source))
             for rel in paths:
                 if rel not in untracked:
