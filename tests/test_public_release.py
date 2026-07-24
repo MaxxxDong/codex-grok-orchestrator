@@ -57,15 +57,16 @@ def test_public_version_surfaces_match_package_metadata() -> None:
     assert [item["version"] for item in locked] == [version]
 
     expected = {
-        "README.md": (f"**{version}**", f"@codex/windows-native-v{version}"),
+        "README.md": (f"**{version}**", f"@v{version}", f"tree/codex/windows-native-v{version}"),
         "CHANGELOG.md": (f"## [{version}]",),
-        "docs/index.html": (f"@codex/windows-native-v{version}",),
+        "docs/index.html": (f"@v{version}",),
         "docs/operations.md": (f"current public release is `{version}`",),
         "docs/releases/release-notes.md": (f"**Version:** `grok-worker` {version}",),
         "docs/windows-upgrade.md": (
             f"to {version}",
             f"--branch codex/windows-native-v{version}",
         ),
+        "docs/macos-upgrade.md": (f"to {version}", f"@v{version}"),
     }
     for relative, snippets in expected.items():
         text = (ROOT / relative).read_text(encoding="utf-8")

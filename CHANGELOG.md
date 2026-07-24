@@ -37,6 +37,10 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ### Fixed
 
+- Keep Windows-only ACP command and process helpers type-safe and testable on
+  macOS without requiring PowerShell on the host.
+- Keep the POSIX fake-Grok lifecycle test faithful to backend exit codes so the
+  same release gates pass on macOS and Windows.
 - Preserve backend/provider failures as the primary lifecycle error when missing
   structured output or artifact finalization is a secondary consequence.
 - Prepare locked nested npm projects inside disposable clones using the shared npm

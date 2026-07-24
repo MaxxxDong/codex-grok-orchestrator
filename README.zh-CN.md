@@ -12,8 +12,8 @@ Python 包与 CLI 名称仍为 **`grok-worker`**。公共仓库身份为 **`code
 
 Worker 的标准外部证据由 `changes.patch`、`worker.log` 和 `verification.txt` 三个文件组成。
 
-Windows 原生 0.8.0 删除模型轮次上限，预算型截断会在同一会话内有界续跑；
+跨平台 0.8.0 删除模型轮次上限，预算型截断会在同一会话内有界续跑；
 `watch --until-settled` 一次等待即可覆盖终态与清理。runner 自己执行 final gates，
-每个 run 使用持久回执，多根目录健康检查、Windows 脏快照、嵌套 npm 依赖和门禁预检均已加固。
+每个 run 使用持久回执，多根目录健康检查、脏快照、嵌套 npm 依赖和门禁预检均已加固。
 它继续保留 Grok Build 原生 Headless、JSON Schema 结果、High、插件、MCP 和严格三文件合同，
-不引入 WSL、第二套运行时或第二份 provider 配置。
+macOS 已完成正式实机验证；Windows 继续使用 native 集成分支，不引入 WSL、第二套运行时或第二份 provider 配置。
