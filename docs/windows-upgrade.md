@@ -1,9 +1,21 @@
-# Windows native upgrade: 0.3-0.5.3 to 0.7.2
+# Windows native upgrade: 0.3-0.7.2 to 0.8.0
 
 This integration branch supports native Windows 10/11. It does not use WSL as
 the default or as a fallback. The canonical source checkout, installed Windows
 executables, managed acpx runtime, and `%USERPROFILE%\.grok\config.toml` remain
 the only active runtime chain.
+
+## What changes in 0.8.0
+
+- The public model-turn cap is removed. Recoverable native budget stops continue
+  in the same session and repeated no-progress failures stop deterministically.
+- `watch --until-settled` waits for terminal and cleanup events in one command.
+- Runner-owned final gates, durable per-run receipts, multi-root health, bounded
+  Windows snapshot commands, nested npm preparation, strict gate preflight, and
+  cancelled-result rejection harden the existing native lifecycle.
+- The Windows runtime is verified with Grok Build 0.2.111 while keeping the same
+  provider profile, High reasoning, plugins, MCP, hidden child processes, and
+  Win32 process-tree cleanup.
 
 ## What changes in 0.7.2
 
@@ -61,7 +73,7 @@ the only active runtime chain.
 - One-shot `grok-worker run` defaults to native headless and no longer requires
   `acpx`.
 - `--backend acp` and named sessions remain available and still require `acpx`.
-- Windows terminal and file tools are verified with Grok Build 0.2.106. The
+- Windows terminal and file tools are verified with Grok Build 0.2.111. The
   managed acpx runtime remains the only ACP compatibility path; there is no
   global-acpx or WSL fallback.
 - Workers use the native Grok home, so configured plugins, MCP servers, OAuth,
@@ -104,10 +116,10 @@ the only active runtime chain.
    managed acpx status, and a hash of the Grok config.
 2. Back up the full canonical repository (including `.git` and dirty files) and
    the installed uv tool plus both executables.
-3. Fetch and verify the annotated `v0.7.2` tag and Release.
-4. Merge or port the upstream tag into an isolated worktree based on the
-   existing Windows-native branch. Do not replace the Windows branch with a
-   plain tag checkout or a second `git clone --branch v0.7.2` installation.
+3. Fetch and verify `codex/windows-native-v0.8.0` from the canonical repository.
+4. Review or install that branch from the existing canonical checkout. Do not
+   replace it with a second `git clone --branch codex/windows-native-v0.8.0`
+   installation.
 5. Preserve Win32 file locking, reparse-safe cleanup, PowerShell 7/UTF-8,
    adaptive cmd decoding, hidden child processes, Windows process-tree cleanup,
    managed acpx, configurable worker capacity, and the shared status root.

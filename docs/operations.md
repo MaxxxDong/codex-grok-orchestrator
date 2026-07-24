@@ -505,9 +505,17 @@ automatically. Completion events do not copy that output.
 
 ## Version note
 
-The current public release is `0.7.2`. Lifecycle and artifact formats remain
+The current public release is `0.8.0`. Lifecycle and artifact formats remain
 versioned independently so native and ACP backends preserve older evidence and
 status readers.
+
+### 0.8.0 Windows lifecycle efficiency
+
+Native workers have no public model-turn cap. Recoverable budget stops continue
+inside the same session, while repeated no-progress failures stop deterministically.
+`watch --until-settled` consumes terminal and cleanup events in one wait. Durable
+per-run receipts, multi-root health, runner-owned final gates, and bounded Windows
+snapshot commands reduce polling and reject unusable work before provider launch.
 
 ### 0.7.2 CI portability
 

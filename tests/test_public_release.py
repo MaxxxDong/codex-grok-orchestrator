@@ -57,12 +57,15 @@ def test_public_version_surfaces_match_package_metadata() -> None:
     assert [item["version"] for item in locked] == [version]
 
     expected = {
-        "README.md": (f"**{version}**", f"@v{version}"),
+        "README.md": (f"**{version}**", f"@codex/windows-native-v{version}"),
         "CHANGELOG.md": (f"## [{version}]",),
-        "docs/index.html": (f"@v{version}",),
+        "docs/index.html": (f"@codex/windows-native-v{version}",),
         "docs/operations.md": (f"current public release is `{version}`",),
         "docs/releases/release-notes.md": (f"**Version:** `grok-worker` {version}",),
-        "docs/windows-upgrade.md": (f"to {version}", f"--branch v{version}"),
+        "docs/windows-upgrade.md": (
+            f"to {version}",
+            f"--branch codex/windows-native-v{version}",
+        ),
     }
     for relative, snippets in expected.items():
         text = (ROOT / relative).read_text(encoding="utf-8")
@@ -290,6 +293,7 @@ def test_mcp_config_is_optional_in_acpx_command(tmp_path: Path) -> None:
         source=tmp_path,
         prompt="review",
         backend="acp",
+        acpx_bin="acpx",
         mcp_config=None,
         model="test-model",
     )

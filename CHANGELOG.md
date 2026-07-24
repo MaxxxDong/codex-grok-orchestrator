@@ -4,6 +4,8 @@ All notable public changes are recorded here. The project follows semantic versi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-24
+
 ### Changed
 
 - Removed the public `max_turns` / `--max-turns` capability end to end. Native
@@ -45,6 +47,8 @@ All notable public changes are recorded here. The project follows semantic versi
   the manifest, before clone creation or provider invocation.
 - Keep dirty-snapshot Git argv bounded on Windows, then reject any tracked source
   race that materialized outside the disclosure inventory.
+- Keep ACP command-construction tests independent of the machine's managed acpx
+  receipt and PowerShell installation.
 
 ## [0.7.2] - 2026-07-20
 

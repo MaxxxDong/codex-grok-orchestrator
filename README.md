@@ -15,21 +15,17 @@ Python package and CLI name (unchanged): **`grok-worker`**
 | **Release notes** | [docs/releases/release-notes.md](docs/releases/release-notes.md) |
 | **License** | Apache-2.0 |
 
-### Latest update — 2026-07-20
+### Latest update — 2026-07-24
 
-`grok-worker` **0.7.2** makes clean CI independent of a locally installed Grok
-CLI while preserving production binary discovery. **0.7.1** makes the real cross-process lock tests portable to the
-Grok Build macOS sandbox without weakening their concurrency assertions. It
-replaces test-only `multiprocessing` semaphores with independent Python
-subprocesses and a plain-file start barrier; production behavior is unchanged.
-**0.7.0** focuses on faster repeated repository work without
-weakening High-reasoning enforcement, isolation, cleanup, or lifecycle truth:
-bounded execution contracts (targets, focused checks, risk-expanded final
-gates), native same-task continuation, stable prompt fingerprints with honest
-cache A/B metrics, opt-in pure-code tool policy, productive-progress attention,
-and runner-owned native JSON Schema final-result capture. **0.6.1** tightened
-CLI/metrics/efficiency guidance; **0.6.0** made detached event-first
-`run --detach` + `watch` the Codex default. See the
+The Windows-native **0.8.0** integration removes the model-turn cap, continues
+recoverable native budget stops in the same session, and lets one
+`watch --until-settled` wait cover both completion and cleanup. Runner-owned
+final gates, durable per-run receipts, multi-root health, bounded Windows dirty
+snapshots, nested npm preparation, strict gate preflight, and cancelled-result
+rejection make completion faster and fail closed without adding a second runtime
+or provider configuration. It is verified against Grok Build 0.2.111 while
+retaining the 0.7.x execution contracts, native JSON Schema results, explicit
+High reasoning, plugins, MCP, and three-file artifact contract. See the
 [release notes](docs/releases/release-notes.md) and
 [Windows native upgrade guide](docs/windows-upgrade.md). The Windows-native
 integration retains hidden process creation, Win32 process-tree cleanup,
@@ -40,6 +36,7 @@ provider configuration without using WSL.
 
 | Version | Main update / 核心更新 |
 |---|---|
+| [`0.8.0 Windows`](https://github.com/MaxxxDong/codex-grok-orchestrator/tree/codex/windows-native-v0.8.0) | Same-session budget recovery, one-shot settled watch, runner-owned gates, durable receipts, multi-root health, and hardened Windows execution. / 同会话预算恢复、一次等待至清理完成、runner 门禁、持久回执、多根健康检查与 Windows 执行加固。 |
 | [`0.7.2`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.2) | Clean CI no longer depends on a locally installed Grok CLI; production behavior is unchanged. / 干净 CI 不再依赖本机已安装 Grok CLI，生产行为不变。 |
 | [`0.7.1`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.1) | Sandbox-portable real subprocess concurrency tests; no production behavior change. / 真实子进程并发测试兼容 Grok macOS 沙箱，生产行为不变。 |
 | [`0.7.0`](https://github.com/MaxxxDong/codex-grok-orchestrator/releases/tag/v0.7.0) | Execution contracts, native continuation, JSON Schema result capture, tool policy, productive progress, cache fingerprints. / 执行契约、原生续跑、JSON Schema 结果落盘、工具策略、有效进展与缓存指纹。 |
@@ -138,7 +135,7 @@ Worker 只负责执行与交付证据；是否合入始终由调度器或人工�
 ### 安装
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.2"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@codex/windows-native-v0.8.0"
 ```
 
 开发：
@@ -211,7 +208,7 @@ grok-worker session-finalize --source /path/to/repository --manifest-file final.
 
 - [设计原则](docs/design-principles.md)
 - [运维与失败语义](docs/operations.md)
-- [Windows native 0.3-0.5.3 → 0.7.2 升级](docs/windows-upgrade.md)
+- [Windows native 0.3-0.7.2 → 0.8.0 升级](docs/windows-upgrade.md)
 - [Skill 接入](SKILL.md)
 - [发布说明](docs/releases/release-notes.md)
 - [变更记录](CHANGELOG.md)
@@ -307,7 +304,7 @@ Provider login and credentials stay outside this repository.
 ### Install
 
 ```bash
-uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@v0.7.2"
+uv tool install --force "git+https://github.com/MaxxxDong/codex-grok-orchestrator.git@codex/windows-native-v0.8.0"
 ```
 
 Development:
@@ -375,7 +372,7 @@ Clone-local `.grok-output/result.json` is embedded into `verification.txt`; it i
 
 - [Design principles](docs/design-principles.md)
 - [Operations](docs/operations.md)
-- [Windows native 0.3-0.5.3 → 0.7.2 upgrade](docs/windows-upgrade.md)
+- [Windows native 0.3-0.7.2 → 0.8.0 upgrade](docs/windows-upgrade.md)
 - [Skill integration](SKILL.md)
 - [Release notes](docs/releases/release-notes.md)
 - [Changelog](CHANGELOG.md)
